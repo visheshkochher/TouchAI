@@ -103,7 +103,7 @@ the bridge can do anything you could do by hand. Details: [mcp/README.md](mcp/RE
 
    ```sh
    git clone https://github.com/visheshkochher/TouchAI.git
-   cd <repo>
+   cd TouchAI
    ```
 
 2. **Open your TouchDesigner project** (or a new empty one).
