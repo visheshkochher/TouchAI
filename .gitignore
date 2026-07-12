@@ -33,3 +33,7 @@ __pycache__/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Private planning docs (not part of the public repo)
+PROMOTION.md
+promo/
