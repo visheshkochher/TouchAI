@@ -1,0 +1,35 @@
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+*venv*/
+
+# Working copies and rendered output (binary; docs use these as scratch/output dirs)
+work/
+renders/
+
+# TouchDesigner runtime artifacts
+Backup/
+*.toe.bak
+*.dmp
+CrashAutoSave*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Secrets
+.env
+*.key
+
+# Claude Code local settings
+.claude/settings.local.json
