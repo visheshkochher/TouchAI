@@ -102,7 +102,7 @@ the bridge can do anything you could do by hand. Details: [mcp/README.md](mcp/RE
 1. **Clone the repo:**
 
    ```sh
-   git clone https://github.com/<user>/<repo>.git
+   git clone https://github.com/visheshkochher/TouchAI.git
    cd <repo>
    ```
 
