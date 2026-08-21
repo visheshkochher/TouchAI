@@ -57,7 +57,9 @@ s.par.Audiosrc = 'file'
 
 for nm, label, val, lo, hi in [
     ('Reactivity', 'Reactivity',      1.0, 0.0, 3.0),
+    ('Devgain',    'Device In Gain',  5.0, 1.0, 30.0),
     ('Warp',       'Kick Warp',       0.5, 0.0, 3.0),
+    ('Spinkick',   'Beat Spin',       2.2, 0.0, 8.0),
     ('Nebula',     'Nebula Density',  1.0, 0.0, 2.5),
     ('Twinkle',    'Star Twinkle',    1.0, 0.0, 2.0),
 ]:
@@ -97,7 +99,11 @@ spec = C(audiospectrumCHOP, 'spectrum', 510, 840, frequencylog=True,
          fftsize='2048', outputmenu='setmanually', outlength=SPECBANDS)
 W(mono, spec)
 spec_gain = C(mathCHOP, 'spec_gain', 680, 840)
-spec_gain.par.gain.expr = "2.5 * parent().par.Reactivity"   # one knob scales all
+# A mic/line input sits far below a decoded file, so device mode gets its own
+# gain stage on top of Reactivity. File mode is untouched (multiplier 1.0).
+spec_gain.par.gain.expr = ("2.5 * parent().par.Reactivity * "
+                           "(parent().par.Devgain.eval() "
+                           "if parent().par.Audiosrc.menuIndex == 0 else 1.0)")
 W(spec, spec_gain)
 null_spec = C(nullCHOP, 'null_spec', 850, 840)
 W(spec_gain, null_spec)
@@ -123,7 +129,7 @@ W(null_spec, trim_bass)
 anl_bass = C(analyzeCHOP, 'anl_bass', 1190, 990, function='average')
 W(trim_bass, anl_bass)
 math_bass = C(mathCHOP, 'math_bass', 1360, 990)
-math_bass.par.fromrange2 = 1.0
+math_bass.par.fromrange2 = 0.6
 math_bass.par.torange2 = 1.0
 W(anl_bass, math_bass)
 lag_bass = C(lagCHOP, 'lag_bass', 1530, 990, lag1=0.06, lag2=0.4)
@@ -154,16 +160,30 @@ kick_norm = C(mathCHOP, 'kick_norm', 1530, 1290, chopop='div')
 W(anl_bass, kick_norm, 0)
 W(lag_ref, kick_norm, 1)
 kick = C(triggerCHOP, 'kick_trig', 1700, 1290,
-         threshup=2.2, threshdown=1.3, attack=0.005, decay=0.12,
+         threshup=2.0, threshdown=1.25, attack=0.005, decay=0.12,
          sustain=0.0, release=0.10, retrigger=0.20)
 W(kick_norm, kick)
 null_beat = C(nullCHOP, 'null_beat', 1870, 1290)
 W(kick, null_beat)
 
+# Planet spin: each kick ADDS angular velocity, which is why this is an
+# integrated phase (speedCHOP) and not `time * rate`. Scaling absTime by a
+# beat-varying factor would snap the whole accumulated angle on every hit;
+# integrating a rate accelerates smoothly and never jumps. Rests at the idle
+# rate 0.035 rad/s, exactly the constant it replaces.
+spin_rate = C(mathCHOP, 'spin_rate', 2040, 1290, postoff=0.035)
+spin_rate.par.gain.expr = "parent().par.Spinkick"
+W(null_beat, spin_rate)
+spin_phase = C(speedCHOP, 'spin_phase', 2210, 1290, timeslice=True)
+W(spin_rate, spin_phase)
+null_spin = C(nullCHOP, 'null_spin', 2380, 1290)
+W(spin_phase, null_spin)
+
 ENERGY = "min(1.0, op('null_energy')['chan1'])"
 BASS = "min(1.0, op('null_bass')['chan1'])"
 HIGHS = "min(1.0, op('null_highs')['chan1'])"
 BEAT = "min(1.0, op('null_beat')['chan1'])"
+SPIN = "op('null_spin')['chan1']"
 
 # ---------------------------------------------------------------------------
 # NEBULA SOURCE — one slow noise field, the only thing the starfield shader reads
@@ -323,8 +343,12 @@ planets.par.vec0valuex.expr = "absTime.seconds"
 planets.par.vec0valuey.expr = ENERGY
 planets.par.vec0valuez.expr = BASS
 planets.par.vec0valuew.expr = BEAT
+planets.par.vec = 2
+planets.par.vec1name = 'uOrb'
+planets.par.vec1valuex.expr = SPIN
 
 s.op('planets_pixel').text = """uniform vec4 uPlanet;  // x time, y energy, z bass, w beat
+uniform vec4 uOrb;     // x integrated spin phase (accelerates on each kick)
 out vec4 fragColor;
 
 vec4 over(vec4 f, vec4 b) { return f + b * (1.0 - f.a); }
@@ -371,14 +395,14 @@ void main() {
     // gas giant, off-centre (break symmetry once) with a slow bob
     // the disc swells on bass, the atmosphere flares on the kick (both rest at idle)
     vec2 pc = vec2(0.30, -0.06 + 0.012 * sin(t * 0.07));
-    vec4 p1 = body(uv, pc, 0.26 * (1.0 + 0.022 * uPlanet.z), t * 0.035, L,
+    vec4 p1 = body(uv, pc, 0.26 * (1.0 + 0.022 * uPlanet.z), uOrb.x, L,
                    vec3(0.55, 0.62, 0.95), 1.0,
                    0.9 + 0.5 * uPlanet.y + 0.8 * uPlanet.w);
 
     // moon on a slow ellipse — passes in front, then behind
     float a  = t * 0.055;
     vec2 mc  = pc + vec2(0.52 * cos(a), 0.17 * sin(a));
-    vec4 p2  = body(uv, mc, 0.075, -t * 0.02, L, vec3(0.68, 0.66, 0.62), 2.0, 0.30);
+    vec4 p2  = body(uv, mc, 0.075, -uOrb.x * 0.57, L, vec3(0.68, 0.66, 0.62), 2.0, 0.30);
 
     vec4 c = (sin(a) < 0.0) ? over(p1, p2) : over(p2, p1);
     fragColor = TDOutputSwizzle(c);
