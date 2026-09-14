@@ -36,6 +36,35 @@ Plant *i* is born on cycle *i*. From cycle *i+1* on it simply stays grown while 
 cycles keep adding flowers to it (`dens0..2`), so the garden accumulates rather than
 resetting. `Restart` zeroes it back to a bare wall.
 
+## Stages — keys 1-6
+
+The arc is also addressable as six discrete scenes. Press a number key with the TD
+window focused, pulse the matching button on the COMP, or set the `Stage` menu by hand
+— all three write the same `Stage` parameter, which the director reads.
+
+| key | pulse | stage | pinned to |
+|---|---|---|---|
+| `1` | `Gowall` | bare traced wall | cycle 0, phase 0.02 |
+| `2` | `Gocrack` | the wall cracking open | cycle 0, phase 0.22 |
+| `3` | `Gogrow` | stem climbing through | cycle 0, phase 0.50 |
+| `4` | `Gobloom` | flowers open | cycle 0, phase 0.80 |
+| `5` | `Gobees` | bees arrive | cycle 0, phase 0.99 |
+| `6` | `Gogarden` | full garden, all three plants | cycle 3, phase 0.99 |
+| `0` | `Goauto` | hand it back to the running cycle | — |
+
+`Nextstage` steps through them in order (and wraps back to auto), which is the one to
+bind to a footswitch or a MIDI pad.
+
+A stage pins the **cycle as well as the phase**. Pinning only the phase would mean
+"bare wall" stops being bare once a few cycles have elapsed, because by then every
+plant is already grown. `ctime` is deliberately *not* pinned — it keeps running off the
+free-wheeling timer, so a held scene still has its bees orbiting and its plants swaying
+rather than freezing into a photograph.
+
+Note that TD delivers at most one pulse per parameter per frame, so firing several
+stage pulses inside a single script only applies the first. One key press or one button
+click per frame is exactly what the real use looks like.
+
 ## Custom parameters
 
 On the `reclaim` COMP, page **Reclaim**:
@@ -53,16 +82,36 @@ On the `reclaim` COMP, page **Reclaim**:
 | `Beecount` / `Beespeed` | how many bees and how fast they orbit |
 | `Glow` | bloom pass strength |
 | `Vignette` | corner falloff |
-| `Restart` | reset to a bare wall (cycle 0) |
+| `Stage` | which scene to hold, or `auto` to run the cycle (see Stages above) |
+| `Gowall` … `Gogarden`, `Goauto` | pulse straight to one stage |
+| `Nextstage` | step to the next stage, wrapping back to auto |
+| `Restart` | reset to a bare wall (cycle 0) and resume the auto cycle |
 
 ## Audio mapping
 
 Canonical two-band chain from `patterns.md` (lowpass 700 Hz / highpass 3 kHz, each
 enveloped, **resampled to 60 Hz**, then filtered) plus a slow overall energy envelope.
 
-- **bass** → growth surge, brightness of the light bleeding through the fracture
-- **high** → bee speed and orbit radius
+- **bass** → growth surge, brightness of the light bleeding through the fracture, and
+  the bees' orbit radius breathing in and out
+- **high** → no longer drives the bees at all (see below)
 - **energy** → stem colour warmth, flower lift, glow strength, plant sway
+
+### Bees are rhythmic, not frantic
+
+Three things were making the swarm read as jitter, and all three are fixed:
+
+- Per-bee orbital rates were spread over **2.55×**, and a treble transient multiplied
+  speed on top of that, so the fastest bee could run **5.6×** the slowest. Every bee now
+  shares one rate with a ±6% spread (**1.13×** total), and the treble band no longer
+  touches speed.
+- The beat now breathes the orbit **radius** (±18%) instead of the speed, so bees pulse
+  toward and away from their flower on the music instead of sprinting.
+- The wobble was at non-integer harmonics (1.3 / 2.7 / 3.1 ×) which never resolved
+  against the orbit. It now sits on exact **2×** and **0.5×** harmonics, so it repeats
+  with the orbit and reads as a hover.
+
+`Beespeed` sets the shared rate.
 
 ## Structure
 

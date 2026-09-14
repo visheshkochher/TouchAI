@@ -28,6 +28,19 @@ GENMAX = 6.0                      # L-System generations at full growth
 MAXSITES = 96                     # hard cap on flower sites (all plants combined)
 MAXBEES = 48
 
+# The scene's six moments, as (cycle, phase-within-cycle). Selectable live from keys
+# 1-6, from the Stage pulses, or left on 'auto' to run the whole arc on a loop.
+# Holding a stage pins the cycle too: at cycle 3 every plant is already grown, so
+# "bare wall" would not be bare if it only pinned the phase.
+STAGES = [
+    ('wall',   ' 1 - Bare Wall',   0, 0.02),
+    ('crack',  ' 2 - Cracking',    0, 0.22),
+    ('grow',   ' 3 - Growing',     0, 0.50),
+    ('bloom',  ' 4 - Bloom',       0, 0.80),
+    ('bees',   ' 5 - Bees',        0, 0.99),
+    ('garden', ' 6 - Full Garden', 3, 0.99),
+]
+
 # Where the brick wall photo lives. First existing path wins.
 WALL_CANDIDATES = [
     '/Users/visheshkochher/Projects/TouchAI/media/brick-wall.png',
@@ -121,6 +134,19 @@ for nm, label, val, lo, hi in [
     par.default = val
     par.val = val
 
+# --- stage selection -------------------------------------------------------
+# 'auto' runs the arc on the cycle timer; any other value pins the scene to that
+# moment while the clock keeps running underneath, so bees and sway stay alive.
+pg.appendMenu('Stage', label='Stage')
+s.par.Stage.menuNames = ['auto'] + [st[0] for st in STAGES]
+s.par.Stage.menuLabels = [' 0 - Auto Cycle'] + [st[1] for st in STAGES]
+s.par.Stage.default = 'auto'
+s.par.Stage = 'auto'
+
+for st, label, _c, _f in STAGES:
+    pg.appendPulse('Go' + st, label=label)
+pg.appendPulse('Goauto', label=' 0 - Auto Cycle')
+pg.appendPulse('Nextstage', label='Next Stage')
 pg.appendPulse('Restart', label='Restart Cycle')
 
 # ---------------------------------------------------------------------------
@@ -214,10 +240,13 @@ timer.par.length.expr = "parent().par.Cyclelen"
 # ---------------------------------------------------------------------------
 dir_src = C(textDAT, 'director_src', 1780, 1120)
 dir_src.text = '''# Director: turns the cycle timer + audio bands into every envelope the scene needs.
+# Stage > 0 pins (cycle, phase) to one moment of the arc; ctime keeps running off the
+# free-wheeling timer either way, so held scenes still breathe.
 # Phase windows within a cycle:
 #   crack 0.00-0.24   grow 0.14-0.60   bloom 0.50-0.80   bees 0.66-1.00
 # Plant i is born on cycle i; from cycle i+1 on it simply stays grown.
 NPLANTS = %d
+STAGES = %r
 
 
 def smooth(t):
@@ -251,7 +280,13 @@ def onCook(scriptOp):
                     chan(tmr, 'timer_cycles_fraction', cyc + frac))
 
     cyclen = float(par.Cyclelen.eval())
+    # ctime is deliberately taken from the un-pinned timer: a held stage still needs a
+    # running clock for the bees to orbit on and the plants to sway.
     ctime = cyc_frac * cyclen
+
+    stage = int(par.Stage.menuIndex)
+    if 0 < stage <= len(STAGES):
+        cyc, frac = STAGES[stage - 1]
 
     bass = chan(aud, 'bass', 0.0)
     high = chan(aud, 'high', 0.0)
@@ -295,7 +330,7 @@ def onCook(scriptOp):
     for c, k in zip(chans, keys):
         c[0] = out[k]
     return
-''' % len(PLANTS)
+''' % (len(PLANTS), [(c, f) for _n, _l, c, f in STAGES])
 
 director = C(scriptCHOP, 'director', 1940, 1120)
 director.par.callbacks = dir_src.path
@@ -737,7 +772,7 @@ def onCook(scriptOp):
         return
 
     t = dc('ctime')
-    high = dc('high')
+    bass = dc('bass')
     fullness = dc('fullness')
 
     # Only flowers on plants whose bee window has opened are worth visiting.
@@ -768,15 +803,24 @@ def onCook(scriptOp):
     r2 = np.mod(np.sin(idx * 78.233) * 12345.6789, 1.0)
     r3 = np.mod(np.sin(idx * 39.425) * 24634.6345, 1.0)
 
-    speed = float(par.Beespeed.eval()) * (0.9 + 1.4 * r1) * (1.0 + 1.2 * high)
-    ang = t * speed + r2 * 6.2831
-    rad = (0.075 + 0.075 * r3) * (1.0 + 0.5 * high)
+    # Rhythmic, not frantic. Three things were making the swarm read as jitter:
+    # per-bee rates spread over 2.5x, the treble band multiplying the orbital SPEED,
+    # and wobble at non-integer harmonics (1.3 / 2.7 / 3.1) that never resolved.
+    # Now every bee shares one orbital rate with only a slight spread, the beat
+    # breathes the orbit radius instead of the speed, and the wobble sits on exact
+    # 2x and 0.5x harmonics so it repeats with the orbit.
+    TAU = 6.283185307179586
+    rate = float(par.Beespeed.eval()) * 1.05 * (0.94 + 0.12 * r1)
+    ang = t * rate + r2 * TAU
+
+    breathe = 1.0 + 0.18 * bass
+    rad = (0.070 + 0.045 * r3) * breathe
 
     ox = np.cos(ang) * rad
-    oy = np.sin(ang * 1.3 + r1 * 3.0) * rad * 0.8
-    # a small figure-eight wobble so the orbit never reads as a perfect circle
-    ox = ox + 0.018 * np.sin(ang * 2.7 + r3 * 4.0)
-    oy = oy + 0.014 * np.cos(ang * 3.1 + r2 * 4.0)
+    oy = np.sin(ang) * rad * 0.62            # flattened ellipse, same frequency
+    ox = ox + 0.010 * np.sin(ang * 2.0 + r3 * TAU)
+    oy = oy + 0.008 * np.cos(ang * 2.0 + r2 * TAU)
+    oy = oy + 0.013 * np.sin(ang * 0.5 + r1 * TAU)   # slow hover, half the orbit
 
     arrive = beeenv[np.clip(apid, 0, NPLANTS - 1)]
     arrive = np.clip((arrive - r1 * 0.35) / 0.65, 0.0, 1.0)
@@ -789,8 +833,8 @@ def onCook(scriptOp):
     by = entry_y + (ay + oy - entry_y) * arrive
 
     sz = arrive * (0.034 + 0.018 * r3)
-    # heading, so the bee tilts into its travel direction
-    rz = np.degrees(np.arctan2(np.cos(ang * 1.3 + r1 * 3.0), -np.sin(ang))) - 90.0
+    # heading from the ellipse tangent, so the bee tilts into its travel direction
+    rz = np.degrees(np.arctan2(np.cos(ang) * 0.62, -np.sin(ang)))
 
     scriptOp.numSamples = nb
     data = [bx, by, np.full(nb, 0.06, dtype=np.float32), sz, sz, sz, rz]
@@ -975,19 +1019,68 @@ s.outputConnectors[0].connect(pout.inputConnectors[0])
 # ---------------------------------------------------------------------------
 # Restart pulse -> re-cue the cycle timer.
 # ---------------------------------------------------------------------------
-pexec = C(parameterexecuteDAT, 'restart_exec', 1940, 1000)
-pexec.text = '''def onPulse(par):
-    if par.name == 'Restart':
-        t = par.owner.op('cycle_timer')
+pexec = C(parameterexecuteDAT, 'stage_exec', 1940, 1000)
+pexec.text = '''# Every Go<stage> pulse just writes the Stage menu; the director reads it from
+# there, so keys, pulses and hand-setting the menu all go through one path.
+STAGE_NAMES = %r
+
+
+def onPulse(par):
+    comp = par.owner
+    n = par.name
+    if n == 'Restart':
+        t = comp.op('cycle_timer')
         if t:
             # start alone resumes the timer but leaves the cycle counter where it
             # was, so the garden would come back already full. initialize zeroes it.
             t.par.initialize.pulse()
             t.par.start.pulse()
+        comp.par.Stage = 'auto'
+    elif n == 'Goauto':
+        comp.par.Stage = 'auto'
+    elif n == 'Nextstage':
+        cur = int(comp.par.Stage.menuIndex)
+        comp.par.Stage.menuIndex = (cur + 1) %% (len(STAGE_NAMES) + 1)
+    elif n.startswith('Go'):
+        want = n[2:].lower()
+        if want in STAGE_NAMES:
+            comp.par.Stage = want
     return
-'''
+''' % [st[0] for st in STAGES]
 pexec.par.op = s.path
-soft(pexec, pars='Restart', valuechange=False, onpulse=True)
+soft(pexec, pars='Restart Goauto Nextstage ' + ' '.join('Go' + st[0] for st in STAGES),
+     valuechange=False, onpulse=True)
+
+# --- keyboard: 1-6 select a stage, 0 returns to the auto cycle ---------------
+keyin = C(keyboardinDAT, 'key_stage', 1780, 880)
+keyin.par.keys = '0 1 2 3 4 5 6'
+# TD auto-docks a <name>_callbacks Text DAT when the op is created; reuse it if so.
+kcb = keyin.par.callbacks.eval()
+if kcb is None:
+    kcb = C(textDAT, 'key_stage_callbacks', 1780, 800)
+    keyin.par.callbacks = kcb.path
+kcb.nodeX, kcb.nodeY = 1780, 800
+kcb.text = '''# 1-6 jump to a stage, 0 hands the scene back to the auto cycle.
+STAGE_NAMES = %r
+
+
+def onKey(dat, keyInfo):
+    if not keyInfo.state:          # key-up; act once, on the press
+        return
+    comp = dat.parent()
+    k = keyInfo.key
+    if k == '0':
+        comp.par.Stage = 'auto'
+    elif k in '123456':
+        i = int(k) - 1
+        if i < len(STAGE_NAMES):
+            comp.par.Stage = STAGE_NAMES[i]
+    return
+
+
+def onShortcut(dat, shortcutName, time):
+    return
+''' % [st[0] for st in STAGES]
 
 s.par.display = True
 s.par.opviewer = final_out.path
