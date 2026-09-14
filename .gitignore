@@ -38,3 +38,6 @@ __pycache__/
 PROMOTION.md
 promo/
 scenes/
+
+# Git worktrees created by the agent (never commit a worktree directory)
+.claude/worktrees/
