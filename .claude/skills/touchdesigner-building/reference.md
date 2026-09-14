@@ -225,6 +225,68 @@ Gotchas (from Derivative's docs):
 - Feedback loops can over-allocate memory — set the feedbackPOP's allocation limit toggle.
 - Attributes are referenced, not copied, downstream (`(r)` in info) — memory is cheaper than it looks; deleting attributes mid-chain rarely saves anything.
 
+## L-Systems (lsystemSOP) — procedural plants
+
+**Rules come from a DAT, not from parameters.** On 2025.33230 the SOP has no
+`premise`/`rule1..N` params at all — only a `rules` param pointing at a DAT. The DAT is
+a list of lines:
+
+```
+premise:FX
+X=F-[[X]+X]+F[+FX]-X
+F=FF
+```
+
+**There must be no space after `:` or `=`.** `premise: FX` produces zero geometry,
+zero points, and an empty `errors()` — it fails completely silently. Optional
+`context_ignore:` line for context-sensitive rules; rule syntax is
+`[lc<]pred[>rc][:cond]=succ[:prob]`.
+
+Turtle operators worth remembering: `F` forward drawing, `f` forward without drawing,
+`+`/`-` turn, `&`/`^` pitch, `\`/`/` roll, `[`/`]` push/pop (branch), `~(n)` random
+turn, `"`/`!` multiply length/thickness, `J K M` stamp the geometry wired into inputs
+2/3/4 at the turtle. Full table in the offline help at
+`/Applications/TouchDesigner.app/Contents/Resources/tfs/Samples/Learn/OfflineHelp/https.docs.derivative.ca/LSystem_SOP.htm`.
+
+### Growing a plant on the music
+
+`generations` is a **float**, so animating it grows the plant smoothly (with
+`contangl`/`contlength` on, new segments extend from zero). Topology jumps at half
+steps; the interpolation between them is what reads as growth.
+
+Cost scales brutally with generations — measure before committing. Rule
+`A=F[+A]F[-A]A` at `type='tube'`, rows 3 cols 5:
+
+| Gens | points | cook |
+|---|---|---|
+| 4 | 2.5k | 0.6 ms |
+| 5 | 7.7k | 0.9 ms |
+| 6 | 23k | ~1.1 ms |
+| 7 (rule D, 4-way) | 39k | 209 ms |
+
+A plant whose `generations` stops changing stops re-cooking, so only the plant
+currently growing costs anything.
+
+### Shape gotchas
+
+- The textbook bush `premise:FX / X=F-[[X]+X]+F[+FX]-X / F=FF` grows a **long bare
+  stick** before it branches — measured zero horizontal spread across the bottom 30%
+  of the plant. `F=FF` doubles the trunk every generation. For anything that should
+  look like a plant rather than a tree, drop the `F=FF` rule:
+  `premise:A / A=F[+A]F[-A]A` branches from the base up.
+- `type='tube'` (lit, tapered stems) beats `type='skel'` for organic work — flat
+  constant-width lines read as a wire mesh no matter what colour they are. Tubes need
+  a lit MAT (phongMAT) plus a lightCOMP; a constantMAT throws the shading away.
+- **`thickinit` is scaled by the step size, not by plant height.** Calibrate it by
+  rendered silhouette coverage, not by eye on the parameter. For one plant filling
+  ~⅓ of a 1280×720 frame at Gens 6: `0.02` → 0.7 % coverage (sub-pixel hairlines that
+  rasterize to speckles), `0.06` → 4.6 %, `0.30` → 16 % (a solid blob).
+- To read branch **tips** (to place flowers, fruit, instances), take the last vertex of
+  each prim of a **skeleton** L-System: `prim[len(prim)-1].point.P`. Tube mode makes
+  every tip a ring of duplicate points. Keep a second, static full-growth copy for
+  this — a constant `generations` means the Script OP reading it cooks once instead of
+  every frame.
+
 ## Python performance hierarchy (per [Derivative Optimize](https://docs.derivative.ca/Optimize))
 
 Fastest to slowest ways to compute a per-frame value — always prefer the highest tier
@@ -257,6 +319,21 @@ hook — the bridge for OpenCV / numpy work inside the cook chain:
 - A scriptTOP cooks on CPU every frame it's asked for — keep it off the per-frame
   chain unless it earns its cost (see Python hierarchy above); for pure-GPU math use a
   glslTOP instead.
+
+### Instanced sprite gotchas (verified 2025.33230)
+
+- Per-instance colour params are **`instancer` / `instanceg` / `instanceb` /
+  `instancea`** — *not* `instancecolorr/g/b`. `instancecolormode` is
+  `replace | multiply | add | subtract`, and it defaults to **`replace`**, which throws
+  the texture away and paints flat quads. Use `multiply` to tint a sprite texture, and
+  keep the texture near-neutral so the instance colour actually sets the hue.
+- **rectangleSOP's `texture` toggle does not create a `uv` attribute** on this build.
+  Without UVs the sprite renders untextured and the render TOP warns
+  *"A MAT is using texture coordinates, but the POP/SOP ... does not have texture
+  attributes."* Add a `textureSOP` with `type='rowcol'` after the rectangle.
+- **constantMAT blends premultiplied by default** (`srcblend='one'`,
+  `destblend='omsa'`). A sprite shader emitting straight alpha — `vec4(col, a)` —
+  paints an opaque rectangle wherever alpha is 0. Emit `vec4(col * a, a)`.
 
 ## Engine COMP (process isolation, builds ≥2020)
 

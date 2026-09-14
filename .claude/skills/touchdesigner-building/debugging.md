@@ -93,6 +93,43 @@ fallback when driving an older bridge:
    Measure headline numbers with `ui.performMode = True` (reference.md): editor UI
    rendering understates real fps.
 
+## Silent failures that leave `errors()` empty
+
+These produce no error anywhere — the op just does nothing, or does something wrong.
+Check them first when an operator is mysteriously inert.
+
+- **Script CHOP/SOP/DAT: an exception inside `onCook` is swallowed.** The op simply
+  ends up with no channels (or partially-built ones) and `errors()` stays empty. To
+  find it, compare against a Script OP that *is* working: if yours has zero channels
+  where it should have many, it raised before the first `appendChan`; if it has the
+  right channels but one sample, it raised after appending and before setting
+  `numSamples`.
+  The classic cause: **`scriptOp.parent()` returns the parent COMP, not its
+  parameters** — `scriptOp.parent().Cyclelen` is an AttributeError. Use
+  `scriptOp.parent().par.Cyclelen`.
+  Build channels in this order — `clear()`, append every channel, *then* set
+  `numSamples`, then fill.
+- **lsystemSOP Rules DAT with a space after the delimiter.** `premise: FX` yields zero
+  points, zero prims, no error. Write `premise:FX`.
+- **`sin()`, `cos()` etc. are not in the parameter-expression namespace.** `sin(x)`
+  raises `NameError: name 'sin' is not defined` *inside the parameter*, which shows up
+  in the project sweep as an operator warning rather than where you wrote it. Use
+  `math.sin(...)`; `tdu.*` is also available.
+- **Expressions that read a CHOP channel evaluate before that CHOP first cooks** and
+  return `None`, so `5.0 * op('director')['grow0']` raises
+  `TypeError: unsupported operand type(s) for *: 'float' and 'NoneType'` on the first
+  pass. Guard with `(op('director')['grow0'] or 0)`.
+- **parameterexecuteDAT has no `callbacks` parameter** — it *is* the DAT. Assign the
+  callback source to `dat.text`, and point `dat.par.op` at the COMP to watch.
+- **timerCHOP `start` does not reset the cycle counter.** Pulse `initialize` first,
+  then `start`. Its channels are named `timer_fraction`, `cycles`,
+  `cycles_plus_fraction` — not `cycle` / `cycleplusfraction`. `cycles_plus_fraction` is
+  monotonic, which makes it a good continuous clock that survives timeline looping.
+- **Parameters that do not exist just raise on assignment** and abort the rest of a
+  build script. In a long builder, set risky names through a helper that checks
+  `hasattr(op.par, name)` and prints what it skipped. Names that have bitten this repo:
+  levelTOP has no `saturation`; lineMAT colour is `linenearcolorr/g/b`, not `colorr`.
+
 ## Diagnosis Steps
 
 ### 1. Check for errors
