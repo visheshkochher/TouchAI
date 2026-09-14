@@ -30,9 +30,9 @@ ASPECT = OUTW / OUTH
 ORTHOW = 2.0                      # camera ortho width -> world x in [-1, 1]
 ORTHOH = ORTHOW / ASPECT          # world y in [-0.5625, 0.5625]
 GENMAX = 5.0                      # L-System generations at full growth
-MAXSITES = 128                    # hard cap on flower sites (all plants combined)
-MAXBEES = 64
-MAXLEAVES = 60                    # hard cap on leaves (all plants combined)
+MAXSITES = 30 * 8                 # hard cap on flower sites (all plants combined)
+MAXBEES = 80
+MAXLEAVES = 26 * 8                # hard cap on leaves (all plants combined)
 
 # Master clock period. The clock timer free-runs and cycles on this, and
 # cycles_plus_fraction * CLOCKLEN is a monotonic seconds counter that the story time
@@ -47,10 +47,10 @@ CHECKPOINTS = [
     ('grow',   ' 3 - Sprout & Grow',  0.14),
     ('bloom',  ' 4 - First Bloom',    0.50),
     ('bees',   ' 5 - Bees Arrive',    0.66),
-    ('second', ' 6 - Second Plant',   1.00),
-    ('third',  ' 7 - Third Plant',    2.00),
-    ('fourth', ' 8 - Fourth Plant',   3.00),
-    ('garden', ' 9 - Full Garden',    3.92),
+    ('spread', ' 6 - Spreading',      1.00),
+    ('half',   ' 7 - Half the Wall',  2.00),
+    ('last',   ' 8 - Last Plants',    3.00),
+    ('garden', ' 9 - Full Garden',    4.65),   # into the held ending
 ]
 
 # Where the brick wall photo lives. First existing path wins.
@@ -67,13 +67,22 @@ WALL_CANDIDATES = [
 # changing the rules never silently rescales the garden.
 # Bases sit well inside the frame, not on the floor line: a crack centred at the
 # bottom edge loses half its disc off-screen and stops reading as a break in the wall.
-# Four plants, staggered in height so the garden does not read as a row.
+# Heights are deliberately uneven so the garden does not read as a row of pickets.
 PLANTS = [
-    (-0.70, -0.30, 0.70, 3),
-    (-0.22, -0.47, 0.58, 11),
-    (0.26, -0.19, 0.52, 27),
-    (0.72, -0.44, 0.46, 41),
+    (-0.86, -0.34, 0.66, 3),
+    (-0.62, -0.50, 0.52, 11),
+    (-0.34, -0.22, 0.74, 27),
+    (-0.06, -0.50, 0.50, 41),
+    (0.20, -0.30, 0.66, 59),
+    (0.46, -0.52, 0.46, 73),
+    (0.70, -0.24, 0.60, 89),
+    (0.93, -0.45, 0.44, 101),
 ]
+
+# Plants do not wait for each other. Plant i's scene opens STAGGER scene-lengths after
+# plant i-1, so growth overlaps and the wall is continuously in motion instead of
+# taking eight full minutes to fill.
+STAGGER = 0.5
 
 proj = op('/project1')
 for stale in (SCENE, SCENE + '_out'):
@@ -138,9 +147,10 @@ for nm, label, val, lo, hi in [
     ('Photomix',   'Wall Photo Mix',    0.62, 0.0, 1.0),
     ('Linebright', 'Brick Line Bright', 1.0, 0.0, 3.0),
     ('Crackamt',   'Crack Amount',      1.0, 0.0, 2.0),
+    ('Moss',       'Moss on the Wall',  1.0, 0.0, 2.0),
     ('Flowersize', 'Flower Size',       1.0, 0.2, 3.0),
     ('Leafsize',   'Leaf Size',         1.0, 0.0, 3.0),
-    ('Beecount',   'Bee Count',        18.0, 0.0, float(MAXBEES)),
+    ('Beecount',   'Bee Count',        26.0, 0.0, float(MAXBEES)),
     ('Beespeed',   'Bee Speed',         1.0, 0.0, 3.0),
     ('Glow',       'Glow',              0.55, 0.0, 3.0),
     ('Vignette',   'Vignette',          0.9, 0.0, 2.0),
@@ -404,6 +414,7 @@ import math
 
 NPLANTS = %d
 CLOCKLEN = %.4f
+STAGGER = %.4f     # scene-lengths between one plant's start and the next
 TAIL = 0.30        # extra scene-lengths of held full garden at the end
 
 
@@ -457,7 +468,7 @@ def onCook(scriptOp):
     musical = _clock['musical']
 
     scenelen = max(1.0, float(par.Scenelen.eval()))
-    storyend = scenelen * (NPLANTS + TAIL)
+    storyend = scenelen * ((NPLANTS - 1) * STAGGER + 1.0 + TAIL)
     # Clamped, NOT wrapped: the garden is the end of the story and it stays on screen
     # until someone seeks back to an earlier checkpoint and lets it grow again.
     show = min(storyend, max(0.0, musical - float(par.Timeoffset.eval())))
@@ -476,7 +487,7 @@ def onCook(scriptOp):
     surge = 1.0 + 0.45 * bass
 
     for i in range(NPLANTS):
-        p = (show - i * scenelen) / scenelen     # <0 not yet, 0..1 its scene, >1 done
+        p = (show - i * scenelen * STAGGER) / scenelen   # <0 not yet, 0..1 its scene
         if p < 0.0:
             crack = grow = bloom = bee = 0.0
         elif p <= 1.0:
@@ -500,7 +511,7 @@ def onCook(scriptOp):
         out['dens%%d' %% i] = min(1.0, 0.45 + 0.16 * max(0.0, p - 1.0))
 
     # How full the garden is overall, 0..1 - drives bee count and glow.
-    out['fullness'] = min(1.0, show / (NPLANTS * scenelen))
+    out['fullness'] = min(1.0, show / max(1e-6, storyend - scenelen * TAIL))
 
     scriptOp.clear()
     keys = sorted(out.keys())
@@ -515,7 +526,7 @@ def onCook(scriptOp):
     except Exception:
         pass
     return
-''' % (len(PLANTS), CLOCKLEN)
+''' % (len(PLANTS), CLOCKLEN, STAGGER)
 
 director = C(scriptCHOP, 'director', 1940, 1120)
 director.par.callbacks = dir_src.path
@@ -580,10 +591,7 @@ W(wall_mix, crack_src, 0)
 
 crack_code = '''// Cracks radiating from each plant's seed point: a ridged-noise vein field masked by
 // a growing disc. Also does the wall's final grade, so this is one pass, not four.
-uniform vec4 uSeedA;    // xy seed in uv space, z growth radius, w active
-uniform vec4 uSeedB;
-uniform vec4 uSeedC;
-uniform vec4 uSeedD;
+UNIFORM_SEEDS
 uniform vec4 uParams;   // x time, y crack amount, z bass, w aspect
 uniform vec4 uGrade;    // x vignette, y unused, z unused, w unused
 
@@ -622,12 +630,13 @@ void main() {
     vec4 wall = texture(sTD2DInputs[0], uv);
     vec2 p = vec2(uv.x * uParams.w, uv.y);
 
-    vec4 seeds[4] = vec4[4](uSeedA, uSeedB, uSeedC, uSeedD);
+    SEED_ARRAY
     float crack = 0.0;   // thin fracture lines
     float rim = 0.0;     // dust glowing on the breaking edge
     float hole = 0.0;    // bricks actually gone
+    float moss = 0.0;    // green creeping out from every break
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NSEEDS; i++) {
         vec4 sd = seeds[i];
         if (sd.w < 0.01 || sd.z < 0.0005) continue;
         vec2 sp = vec2(sd.x * uParams.w, sd.y);
@@ -654,6 +663,8 @@ void main() {
         crack = max(crack, web * reach * sd.w);
         rim = max(rim, web * edge * sd.w);
         hole = max(hole, (1.0 - smoothstep(R * 0.10, R * 0.40, d)) * sd.w);
+        // moss spreads much further than the fracture itself
+        moss = max(moss, (1.0 - smoothstep(R * 0.5, R * 3.2, d)) * sd.w);
     }
 
     float amt = uParams.y;
@@ -668,22 +679,45 @@ void main() {
     col += vec3(1.00, 0.50, 0.18) * crack * (0.11 + 0.30 * uParams.z);
     col += vec3(1.00, 0.74, 0.40) * rim * (0.34 + 0.65 * uParams.z);
 
+    // Moss: patchy green growing out of every break, thickening as the garden fills.
+    // Broken up by its own noise so it reads as growth on the brick rather than a
+    // green wash, and it settles into the mortar (the darker pixels) first.
+    float mossN = fbm(p * 22.0);
+    float mortar = 1.0 - smoothstep(0.05, 0.30, dot(wall.rgb, vec3(0.33)));
+    float mossAmt = clamp(moss * uGrade.y, 0.0, 1.0)
+                  * smoothstep(0.30, 0.72, mossN)
+                  * (0.45 + 0.55 * mortar);
+    vec3 mossCol = vec3(0.16, 0.34, 0.12) + 0.5 * wall.rgb * vec3(0.3, 0.9, 0.3);
+    col = mix(col, mossCol, mossAmt * 0.80);
+
     vec2 q = uv - 0.5;
     col *= clamp(1.0 - uGrade.x * dot(q, q) * 1.6, 0.0, 1.0);
 
     fragColor = TDOutputSwizzle(vec4(col, 1.0));
 }
 '''
+# The seed uniforms are generated so the shader always matches len(PLANTS) - adding
+# a plant must never mean hand-editing GLSL.
+_n = len(PLANTS)
+crack_code = crack_code.replace(
+    'UNIFORM_SEEDS',
+    '\n'.join('uniform vec4 uSeed%d;' % i for i in range(_n))
+    + '   // xy seed in uv space, z growth radius, w active')
+crack_code = crack_code.replace(
+    'SEED_ARRAY',
+    'vec4 seeds[%d] = vec4[%d](%s);'
+    % (_n, _n, ', '.join('uSeed%d' % i for i in range(_n))))
+crack_code = crack_code.replace('NSEEDS', str(_n))
+
 crack_dat = C(textDAT, 'wall_crack_pixel', 1460, 620)
 crack_dat.text = crack_code
 crack_src.par.pixeldat = crack_dat.path
 
 # Uniforms via the Vectors page — the Constants page is broken on this build
 # (MACHINE.md), and packing into vec4s is safe everywhere.
-crack_src.par.vec = 6
+crack_src.par.vec = len(PLANTS) + 2
 for i, (px, py, _h, seed) in enumerate(PLANTS):
-    nm = ['uSeedA', 'uSeedB', 'uSeedC', 'uSeedD'][i]
-    setattr(crack_src.par, 'vec%dname' % i, nm)
+    setattr(crack_src.par, 'vec%dname' % i, 'uSeed%d' % i)
     # world -> uv
     getattr(crack_src.par, 'vec%dvaluex' % i).val = 0.5 + px / ORTHOW
     getattr(crack_src.par, 'vec%dvaluey' % i).val = 0.5 + py / ORTHOH
@@ -692,14 +726,18 @@ for i, (px, py, _h, seed) in enumerate(PLANTS):
     getattr(crack_src.par, 'vec%dvaluew' % i).expr = (
         "1.0 if %s > 0.001 else 0.0" % D('crack%d' % i))
 
-crack_src.par.vec4name = 'uParams'
-crack_src.par.vec4valuex.expr = D('ctime')
-crack_src.par.vec4valuey.expr = "parent().par.Crackamt"
-crack_src.par.vec4valuez.expr = D('bass')
-crack_src.par.vec4valuew.val = ASPECT
+_pv = len(PLANTS)
+setattr(crack_src.par, 'vec%dname' % _pv, 'uParams')
+getattr(crack_src.par, 'vec%dvaluex' % _pv).expr = D('ctime')
+getattr(crack_src.par, 'vec%dvaluey' % _pv).expr = "parent().par.Crackamt"
+getattr(crack_src.par, 'vec%dvaluez' % _pv).expr = D('bass')
+getattr(crack_src.par, 'vec%dvaluew' % _pv).val = ASPECT
 
-crack_src.par.vec5name = 'uGrade'
-crack_src.par.vec5valuex.expr = "parent().par.Vignette"
+setattr(crack_src.par, 'vec%dname' % (_pv + 1), 'uGrade')
+getattr(crack_src.par, 'vec%dvaluex' % (_pv + 1)).expr = "parent().par.Vignette"
+# moss creeps out from every crack as the garden fills
+getattr(crack_src.par, 'vec%dvaluey' % (_pv + 1)).expr = (
+    "parent().par.Moss * %s" % D('fullness'))
 
 # ---------------------------------------------------------------------------
 # PLANTS — one L-System per plant, generations animated 0 -> GENMAX
@@ -723,13 +761,13 @@ rules.text = "premise:FFFFA\nA=/(137)F[++A][--A]~(9)A\n"
 # matter what colour they are, while lit tapered tubes read as stems. 12k points at
 # Gens 6 costs ~0.9ms to cook, so it is well inside budget.
 stem_mat = C(phongMAT, 'mat_stem', 0, -60)
-soft(stem_mat, diffr=0.26, diffg=0.40, diffb=0.20,
-     ambr=0.09, ambg=0.13, ambb=0.07,
-     specr=0.18, specg=0.21, specb=0.13, shininess=16.0)
+soft(stem_mat, diffr=0.28, diffg=0.56, diffb=0.22,
+     ambr=0.10, ambg=0.19, ambb=0.08,
+     specr=0.18, specg=0.24, specb=0.13, shininess=16.0)
 # A small, clamped warm-up as the track gets loud - unclamped it drove the bush neon.
 if hasattr(stem_mat.par, 'diffr'):
-    stem_mat.par.diffr.expr = "0.24 + 0.08 * min(1.0, %s)" % D('energy')
-    stem_mat.par.diffg.expr = "0.38 + 0.10 * min(1.0, %s)" % D('energy')
+    stem_mat.par.diffr.expr = "0.26 + 0.08 * min(1.0, %s)" % D('energy')
+    stem_mat.par.diffg.expr = "0.52 + 0.14 * min(1.0, %s)" % D('energy')
 
 # Key light raking from the upper left, matching the photograph's own sunlight patch.
 sun = C(lightCOMP, 'light_sun', 0, -160, lighttype='distant',
@@ -827,10 +865,18 @@ def onCook(scriptOp):
         if sop is None:
             continue
         ends = []
+        seen = set()
         for prim in sop.prims:
             if len(prim) < 2:
                 continue
             P = prim[len(prim) - 1].point.P
+            # Branches that split at a tip end at the SAME point, so the raw list
+            # carries every site twice - which spent half the flower budget stacking
+            # two blooms in one place and double-brightening it.
+            key = (round(P[0], 4), round(P[1], 4), round(P[2], 4))
+            if key in seen:
+                continue
+            seen.add(key)
             ends.append((P[0], P[1], P[2]))
         if not ends:
             continue
@@ -847,10 +893,10 @@ def onCook(scriptOp):
             wz = ez * scl
             # stable per-flower randomness
             r = ((k * 2654435761) %% 10007) / 10007.0
-            pts.append((wx, wy, wz, r, float(pid)))
+            pts.append((wx, wy, wz, r, float(pid), scl))
 
     scriptOp.clear()
-    names = ['tx', 'ty', 'tz', 'rnd', 'pid']
+    names = ['tx', 'ty', 'tz', 'rnd', 'pid', 'pscl']
     chans = [scriptOp.appendChan(n) for n in names]
     scriptOp.numSamples = max(1, len(pts))
     if not pts:
@@ -871,11 +917,12 @@ sites.par.callbacks = sites_src.path
 # FLOWER INSTANCES — bloom timing, per-flower colour, audio breathing
 # ---------------------------------------------------------------------------
 finst_src = C(textDAT, 'flower_inst_src', 820, 40)
-finst_src.text = '''# Per-flower transform + colour. ~128 samples of numpy per frame.
+finst_src.text = '''# Per-flower transform + colour, one numpy pass per frame.
 import numpy as np
 
 NPLANTS = %d
 BASES = %r
+PSCLREF = %.5f     # the tallest plant's geometry scale
 
 
 def onCook(scriptOp):
@@ -898,6 +945,7 @@ def onCook(scriptOp):
     ty = np.array(sites['ty'].vals, dtype=np.float32)
     tz = np.array(sites['tz'].vals, dtype=np.float32)
     rnd = np.array(sites['rnd'].vals, dtype=np.float32)
+    pscl = np.array(sites['pscl'].vals, dtype=np.float32) / PSCLREF
     pid = np.array(sites['pid'].vals, dtype=np.float32).astype(np.int32)
 
     def dc(name, default=0.0):
@@ -955,7 +1003,8 @@ def onCook(scriptOp):
 
     # overshoot then settle - flowers pop rather than fade in
     pop = 1.0 + 0.35 * np.sin(np.clip(local, 0.0, 1.0) * np.pi) * (1.0 - local)
-    head = (0.042 + 0.030 * np.mod(rnd * 3.7, 1.0)) * size
+    # blooms scale with their plant too, so a small plant is not all flower
+    head = (0.042 + 0.030 * np.mod(rnd * 3.7, 1.0)) * size * (0.55 + 0.45 * pscl)
     # a third of full size as a bud, swelling to full as it opens
     scale = budded * (0.32 + 0.68 * openness) * pop * head
     scale = scale * (1.0 + 0.16 * bass)
@@ -978,12 +1027,15 @@ def onCook(scriptOp):
     cb = cb * openness + 0.24 * (1.0 - openness)
 
     scriptOp.numSamples = n
-    data = [tx + nod, ty, tz + 0.02, scale, scale, scale, rot,
+    # ortho camera: a constant z only changes occlusion, never screen position.
+    # In front of the leaves, which are in front of the stems.
+    data = [tx + nod, ty, np.full(n, 0.45, dtype=np.float32),
+            scale, scale, scale, rot,
             cr * lift, cg * lift, cb * lift]
     for c, v in zip(chans, data):
         c.vals = np.asarray(v, dtype=np.float32).tolist()
     return
-''' % (len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS])
+''' % (len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS], max(plant_scales))
 
 finst = C(scriptCHOP, 'flower_inst', 980, 40)
 finst.par.callbacks = finst_src.path
@@ -1100,7 +1152,8 @@ def onCook(scriptOp):
     rz = np.degrees(np.arctan2(np.cos(ang) * 0.62, -np.sin(ang)))
 
     scriptOp.numSamples = nb
-    data = [bx, by, np.full(nb, 0.06, dtype=np.float32), sz, sz, sz, rz]
+    # in front of everything - they are flying around the plant, not inside it
+    data = [bx, by, np.full(nb, 0.60, dtype=np.float32), sz, sz, sz, rz]
     for c, v in zip(chans, data):
         c.vals = np.asarray(v, dtype=np.float32).tolist()
     return
@@ -1292,13 +1345,16 @@ def onCook(scriptOp):
             import math as _m
             ang = _m.degrees(_m.atan2(dy, dx))
             r = ((k * 2654435761) %% 10007) / 10007.0
-            side = 1.0 if (k %% 2 == 0) else -1.0
+            # Strict alternation at a fixed angle marches up the stem as a regular
+            # chevron. Letting the per-leaf random break the alternation and widen
+            # the angle, with a slight downward droop, reads as foliage instead.
+            side = 1.0 if ((k %% 2 == 0) != (r > 0.72)) else -1.0
             pts.append((px + ex * scl, py + ey * scl, ez * scl,
-                        ang + side * (48.0 + 22.0 * r), r, float(pid),
-                        (ey - lo) / span))
+                        ang + side * (32.0 + 58.0 * r) - 10.0, r, float(pid),
+                        (ey - lo) / span, scl))
 
     scriptOp.clear()
-    names = ['tx', 'ty', 'tz', 'rz', 'rnd', 'pid', 'hgt']
+    names = ['tx', 'ty', 'tz', 'rz', 'rnd', 'pid', 'hgt', 'pscl']
     chans = [scriptOp.appendChan(n) for n in names]
     scriptOp.numSamples = max(1, len(pts))
     if not pts:
@@ -1323,6 +1379,7 @@ import numpy as np
 
 NPLANTS = %d
 BASES = %r
+PSCLREF = %.5f     # the tallest plant's geometry scale
 
 
 def onCook(scriptOp):
@@ -1353,6 +1410,7 @@ def onCook(scriptOp):
     rz = np.array(sites['rz'].vals, dtype=np.float32)
     rnd = np.array(sites['rnd'].vals, dtype=np.float32)
     hgt = np.array(sites['hgt'].vals, dtype=np.float32)
+    pscl = np.array(sites['pscl'].vals, dtype=np.float32) / PSCLREF
     pid = np.array(sites['pid'].vals, dtype=np.float32).astype(np.int32)
 
     grow = np.zeros(n, dtype=np.float32)
@@ -1382,24 +1440,32 @@ def onCook(scriptOp):
     ty = basey + dx * sa + dy * ca
 
     # lower leaves are older, so they are larger; the newest near the crown are small
-    size = ((0.030 + 0.034 * (1.0 - hgt)) + 0.014 * rnd) * local \
+    # Leaf size follows the plant it grows on. Fixed world-size leaves made the
+    # short plants read as stacked green chevrons rather than foliage.
+    size = ((0.030 + 0.038 * (1.0 - hgt)) + 0.030 * rnd) * local * pscl \
         * float(par.Leafsize.eval())
     flutter = 7.0 * np.sin(t * 1.1 + rnd * 9.0) * local
     rot = rz + swaydeg + flutter
 
-    shade = 0.75 + 0.45 * rnd
-    lift = 0.85 + 0.20 * min(1.0, energy)
-    cr = 0.26 * shade * lift
-    cg = 0.46 * shade * lift
-    cb = 0.20 * shade * lift
+    shade = 0.80 + 0.45 * rnd
+    lift = 0.95 + 0.25 * min(1.0, energy)
+    cr = 0.30 * shade * lift
+    cg = 0.62 * shade * lift
+    cb = 0.24 * shade * lift
 
+    # The camera is ORTHOGRAPHIC, so translating in z does not move anything on
+    # screen - it only decides what occludes what. The stems are a 3D spray spanning
+    # z -0.20..+0.21, so leaves and blossom sitting at their own tip's z had half the
+    # plant drawing in front of them. Parking each layer at a fixed depth in front of
+    # the stems is free and fixes it outright.
     scriptOp.numSamples = n
-    data = [tx, ty, tz - 0.01, size, size, size, rot, cr, cg, cb]
+    data = [tx, ty, np.full(n, 0.30, dtype=np.float32),
+            size, size, size, rot, cr, cg, cb]
     for c, v in zip(chans, data):
         c.vals = np.asarray(v, dtype=np.float32).tolist()
     return
 ''' % (
-    len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS])
+    len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS], max(plant_scales))
 
 leaf_inst = C(scriptCHOP, 'leaf_inst', 980, -240)
 leaf_inst.par.callbacks = leaf_inst_src.path
@@ -1639,7 +1705,7 @@ print('built %s' % s.path)
 print('  wall photo: %s' % (wall_path or 'NOT FOUND'))
 print('  plants: %d   scene length: %.0fs   full story: %.0fs'
       % (len(PLANTS), s.par.Scenelen.eval(),
-         s.par.Scenelen.eval() * (len(PLANTS) + 0.3)))
+         s.par.Scenelen.eval() * ((len(PLANTS) - 1) * STAGGER + 1.3)))
 print('  checkpoints: %s' % ', '.join('%d=%s' % (i + 1, cp[0])
                                       for i, cp in enumerate(CHECKPOINTS)))
 print('  director chans: %s' % [c.name for c in director.chans()])

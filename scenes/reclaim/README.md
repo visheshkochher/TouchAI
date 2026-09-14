@@ -5,7 +5,8 @@ Nature takes a brick wall back.
 One continuous story, about four minutes long: a photographed brick wall is edge-traced
 to its mortar outlines, a crack opens, an L-System plant pushes through it, grows,
 blooms and draws bees — then a second plant cracks its own brick and does the same,
-then a third, then a fourth, until the wall is a garden — and the garden stays.
+then the next, and the next — eight in all, their scenes overlapping — until the wall
+is a garden, and the garden stays.
 
 Build with:
 
@@ -27,7 +28,7 @@ in story-seconds since the wall was bare:
 
 ```
 show = clamp(musical time − Timeoffset, 0, storyend)
-storyend = Scenelen × (plants + 0.3)      # 60 × 4.3 = 258s by default
+storyend = Scenelen × ((plants−1)×STAGGER + 1 + 0.3)   # 60 × 4.8 = 288s by default
 ```
 
 **The ending persists.** `show` is clamped, not wrapped: once the fourth plant has
@@ -40,8 +41,9 @@ faster than a 90bpm one, and `Scenelen` is "seconds per plant *at the reference
 tempo*". `Beatdrive` blends between constant speed (0) and full tempo-following (1).
 See Tempo below.
 
-Plant *i* owns the window `[i·Scenelen, (i+1)·Scenelen]` and holds its finished state
-afterwards. Within its own 60 seconds:
+Plant *i*'s scene opens `STAGGER` (0.5) scene-lengths after plant *i−1*, so growth
+overlaps and the wall is continuously in motion rather than taking eight full minutes
+to fill. Each plant holds its finished state afterwards. Within its own 60 seconds:
 
 | fraction | seconds | what happens |
 |---|---|---|
@@ -67,10 +69,10 @@ the following twelve seconds rather than a static cracked wall.
 | `3` | `Gogrow` | first sprout pushes through | 8.4 |
 | `4` | `Gobloom` | first plant grown, about to flower | 30 |
 | `5` | `Gobees` | flowers open, bees on their way | 39.6 |
-| `6` | `Gosecond` | second plant starts cracking | 60 |
-| `7` | `Gothird` | third plant starts cracking | 120 |
-| `8` | `Gofourth` | fourth plant starts cracking | 180 |
-| `9` | `Gogarden` | full garden, all four plants | 235.2 |
+| `6` | `Gospread` | garden spreading, 2 of 8 up | 60 |
+| `7` | `Gohalf` | half the wall, 4 of 8 up | 120 |
+| `8` | `Golast` | last plants breaking through, 6 of 8 | 180 |
+| `9` | `Gogarden` | full garden, all eight, into the held ending | 279 |
 | `0` | `Restart` | back to the bare wall, playing | 0 |
 
 Because the ending holds rather than looping, the keys are also how you get *out* of the
@@ -104,6 +106,7 @@ On the `reclaim` COMP, page **Reclaim**:
 | `Photomix` | how much of the brick photograph shows under the traced outlines |
 | `Linebright` | brightness of the traced mortar grid |
 | `Crackamt` | crack strength |
+| `Moss` | how far green creeps over the brick as the garden fills |
 | `Flowersize` | flower head size |
 | `Leafsize` | leaf size (0 removes the foliage entirely) |
 | `Beecount` / `Beespeed` | how many bees, and the shared orbital rate |
@@ -183,6 +186,20 @@ Each plant is four instanced layers over one L-System, not just stems:
   a separate instancer, and it means the crown is never bare while the plant waits for
   its bloom window.
 - **Flowers** — five-petal blooms with a warm centre.
+
+Foliage and blossom scale with **their own plant**: at a fixed world size the short
+plants read as stacked green chevrons rather than leaves.
+
+Depth ordering matters here and is nearly free. The camera is **orthographic**, so
+translating in z never moves anything on screen — it only decides what occludes what.
+The stems are a 3D spray spanning z −0.20…+0.21, so leaves and blossom sitting at their
+own tip's z had half the plant drawing in front of them, which read as blossom
+*detached* from the stem. Each layer is parked at a fixed depth instead: stems, then
+leaves at 0.30, flowers at 0.45, bees at 0.60.
+
+**Moss** creeps out of every crack as `fullness` rises — patchy, broken up by its own
+noise, and settling into the mortar first, so it reads as growth on brick rather than a
+green wash.
 
 Everything rotates about its own plant's base by the **same** `sway` angle, published
 once by the director. Flowers used to carry an unrelated horizontal wiggle of their own
