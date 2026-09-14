@@ -37,3 +37,4 @@ __pycache__/
 # Private planning docs (not part of the public repo)
 PROMOTION.md
 promo/
+scenes/
