@@ -30,7 +30,7 @@ ASPECT = OUTW / OUTH
 ORTHOW = 2.0                      # camera ortho width -> world x in [-1, 1]
 ORTHOH = ORTHOW / ASPECT          # world y in [-0.5625, 0.5625]
 GENMAX = 5.0                      # L-System generations at full growth
-MAXSITES = 30 * 8                 # hard cap on flower sites (all plants combined)
+MAXSITES = 46 * 8                 # hard cap on flower sites (all plants combined)
 MAXBEES = 80
 MAXLEAVES = 26 * 8                # hard cap on leaves (all plants combined)
 
@@ -508,7 +508,7 @@ def onCook(scriptOp):
         out['bloom%%d' %% i] = bloom
         out['bee%%d' %% i] = bee
         # Every later scene keeps adding flowers to the plants already standing.
-        out['dens%%d' %% i] = min(1.0, 0.45 + 0.16 * max(0.0, p - 1.0))
+        out['dens%%d' %% i] = min(1.0, 0.62 + 0.16 * max(0.0, p - 1.0))
 
     # How full the garden is overall, 0..1 - drives bee count and glow.
     out['fullness'] = min(1.0, show / max(1e-6, storyend - scenelen * TAIL))
@@ -851,60 +851,71 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
 # Static input -> this cooks once, not per frame.
 # ---------------------------------------------------------------------------
 sites_src = C(textDAT, 'flower_sites_src', 500, 40)
-sites_src.text = '''# Branch-end points of each fully grown L-System, transformed to world space and
-# thinned to a manageable flower count. Depends only on the static *_full SOPs, so it
-# cooks when the plant definition changes and then stops.
+sites_src.text = '''# Flower anchors: the TRUE branch tips of each fully grown L-System, in world space.
+#
+# A tip is a node with exactly ONE segment touching it - not "the last vertex of a
+# prim". Measured on one plant: 82 real tips (degree 1, heights 0.71-1.00 of the
+# plant) against 41 prim end-points of which exactly ONE was a real tip, the rest
+# being interior junctions at heights 0.55-0.88. Using prim ends put every flower in
+# the middle of the crown with the outer stems left bare.
+#
+# Depends only on the static *_full SOPs, so it cooks when the plant definition
+# changes and then stops.
 PLANTS = %r
 MAXSITES = %d
 
 
+def _key(P):
+    return (round(P[0], 4), round(P[1], 4), round(P[2], 4))
+
+
 def onCook(scriptOp):
     pts = []
+    budget = max(1, MAXSITES // max(1, len(PLANTS)))
     for pid, (px, py, scl, seed) in enumerate(PLANTS):
         sop = op('plant%%d_full' %% pid)
         if sop is None:
             continue
-        ends = []
-        seen = set()
+
+        nbr = {}
         for prim in sop.prims:
-            if len(prim) < 2:
-                continue
-            P = prim[len(prim) - 1].point.P
-            # Branches that split at a tip end at the SAME point, so the raw list
-            # carries every site twice - which spent half the flower budget stacking
-            # two blooms in one place and double-brightening it.
-            key = (round(P[0], 4), round(P[1], 4), round(P[2], 4))
-            if key in seen:
-                continue
-            seen.add(key)
-            ends.append((P[0], P[1], P[2]))
-        if not ends:
+            for i in range(len(prim) - 1):
+                ka = _key(prim[i].point.P)
+                kb = _key(prim[i + 1].point.P)
+                if ka == kb:
+                    continue
+                nbr.setdefault(ka, []).append(kb)
+                nbr.setdefault(kb, []).append(ka)
+        if not nbr:
             continue
-        # Take the HIGHEST tips outright rather than sampling evenly down the plant:
-        # this rule carries its tips in a crown, and the flowers should bunch there
-        # too. An even spread scatters blossom down the bare stems and loses the
-        # bouquet.
-        ends.sort(key=lambda p: -p[1])
-        budget = max(1, MAXSITES // max(1, len(PLANTS)))
-        for k in range(min(budget, len(ends))):
-            ex, ey, ez = ends[k]
-            wx = px + ex * scl
-            wy = py + ey * scl
-            wz = ez * scl
-            # stable per-flower randomness
-            r = ((k * 2654435761) %% 10007) / 10007.0
-            pts.append((wx, wy, wz, r, float(pid), scl))
+
+        ys = [k[1] for k in nbr]
+        lo, hi = min(ys), max(ys)
+        span = max(1e-6, hi - lo)
+
+        # The root is degree 1 as well, so drop anything still down at the base.
+        tips = [k for k, v in nbr.items()
+                if len(v) == 1 and (k[1] - lo) / span > 0.15]
+        tips.sort(key=lambda k: -k[1])
+
+        for j, k in enumerate(tips[:budget]):
+            nb = nbr[k][0]
+            dx, dy = k[0] - nb[0], k[1] - nb[1]
+            dl = (dx * dx + dy * dy) ** 0.5 or 1.0
+            r = ((j * 2654435761) %% 10007) / 10007.0
+            pts.append((px + k[0] * scl, py + k[1] * scl, k[2] * scl,
+                        r, float(pid), scl, dx / dl, dy / dl))
 
     scriptOp.clear()
-    names = ['tx', 'ty', 'tz', 'rnd', 'pid', 'pscl']
+    names = ['tx', 'ty', 'tz', 'rnd', 'pid', 'pscl', 'ux', 'uy']
     chans = [scriptOp.appendChan(n) for n in names]
     scriptOp.numSamples = max(1, len(pts))
     if not pts:
         for c in chans:
             c[0] = 0.0
         return
-    for j, p in enumerate(pts):
-        for c, v in zip(chans, p):
+    for j, pt in enumerate(pts):
+        for c, v in zip(chans, pt):
             c[j] = v
     return
 ''' % ([(PLANTS[i][0], PLANTS[i][1], plant_scales[i], PLANTS[i][3])
@@ -946,6 +957,8 @@ def onCook(scriptOp):
     tz = np.array(sites['tz'].vals, dtype=np.float32)
     rnd = np.array(sites['rnd'].vals, dtype=np.float32)
     pscl = np.array(sites['pscl'].vals, dtype=np.float32) / PSCLREF
+    ux = np.array(sites['ux'].vals, dtype=np.float32)
+    uy = np.array(sites['uy'].vals, dtype=np.float32)
     pid = np.array(sites['pid'].vals, dtype=np.float32).astype(np.int32)
 
     def dc(name, default=0.0):
@@ -973,6 +986,14 @@ def onCook(scriptOp):
         swaydeg[m] = dc('sway%%d' %% i)
         basex[m] = BASES[i][0]
         basey[m] = BASES[i][1]
+
+    # Push the bloom out ALONG its branch so its base meets the tip and the head sits
+    # beyond it, instead of the quad straddling the tip and burying half the flower in
+    # the foliage. Done before the sway rotation so the offset rotates with it.
+    reach = (0.042 + 0.030 * np.mod(rnd * 3.7, 1.0)) \
+        * float(par.Flowersize.eval()) * (0.55 + 0.45 * pscl) * 0.55
+    tx = tx + ux * reach
+    ty = ty + uy * reach
 
     # Rotate each flower about its own plant's base by exactly the angle the plant
     # COMP is rotating by, so blossom stays welded to the stem tip it grew on.
@@ -1245,11 +1266,15 @@ bee_quad = C(gridSOP, 'bee_quad', 1300, -120, rows=2, cols=2,
 
 mat_flower = C(constantMAT, 'mat_flower', 1300, 110)
 mat_flower.par.colormap = flower_tex.path
-soft(mat_flower, alpha=1.0, blending=True, depthtest=False)
+# depthtest ON, depthwriting OFF is the textbook transparent-surface setup, and it is
+# what actually puts the blossom in front. depthtest=False does NOT mean "draw on
+# top" - it means the fragment ignores its own (correct, nearer) depth, and under the
+# render TOP's order-independent transparency the stems then won.
+soft(mat_flower, alpha=1.0, blending=True, depthtest=True, depthwriting=False)
 
 mat_bee = C(constantMAT, 'mat_bee', 1300, -50)
 mat_bee.par.colormap = bee_tex.path
-soft(mat_bee, alpha=1.0, blending=True, depthtest=False)
+soft(mat_bee, alpha=1.0, blending=True, depthtest=True, depthwriting=False)
 
 flowers = C(geometryCOMP, 'flowers', 1460, 40)
 fq = flowers.op('torus1')
@@ -1514,7 +1539,7 @@ leaf_quad = C(gridSOP, 'leaf_quad', 1300, -240, rows=2, cols=2,
 
 mat_leaf = C(constantMAT, 'mat_leaf', 1300, -180)
 mat_leaf.par.colormap = leaf_tex.path
-soft(mat_leaf, alpha=1.0, blending=True, depthtest=False)
+soft(mat_leaf, alpha=1.0, blending=True, depthtest=True, depthwriting=False)
 
 leaves = C(geometryCOMP, 'leaves', 1460, -240)
 lq = leaves.op('torus1')
@@ -1540,19 +1565,43 @@ soft(leaves, instancecolormode='multiply', instancer='cr',
 cam = C(cameraCOMP, 'cam', 1620, -60, projection='ortho', tz=4.0)
 soft(cam, orthowidth=ORTHOW, near=0.1, far=20.0)
 
-render = C(renderTOP, 'render_garden', 1780, -60)
-res(render)
-render.par.camera = cam.path
-render.par.geometry = ' '.join('plant%d_geo' % i for i in range(len(PLANTS))) \
-    + ' leaves flowers bees'
-render.par.lights = 'light_sun light_fill'
-render.par.bgcolora = 0.0
-soft(render, antialias='msaa4x', transparency=True)
+# THREE passes, not one. Inside a single render TOP the blossom kept losing to the
+# stems no matter what: depth ordering did not decide it (flowers parked at z=3.0,
+# right against the camera, still drew behind stems at z<=0.2), and neither
+# transparency mode changed it. Compositing separate passes in 2D is unconditional -
+# what is in front is simply whatever is composited last.
+def R(name, geo, x, y):
+    o = C(renderTOP, name, x, y)
+    res(o)
+    o.par.camera = cam.path
+    o.par.geometry = geo
+    o.par.lights = 'light_sun light_fill'
+    o.par.bgcolora = 0.0
+    soft(o, antialias='msaa4x', transparency='sortedblending')
+    return o
+
+
+render = R('render_plants',
+           ' '.join('plant%d_geo' % i for i in range(len(PLANTS))) + ' leaves',
+           1780, -60)
+render_bloom = R('render_bloom', 'flowers', 1780, 60)
+render_bees = R('render_bees', 'bees', 1780, 180)
+
+# wall <- plants <- blossom <- bees, each strictly over the last
+comp_pl = C(compositeTOP, 'comp_plants', 1940, 180, operand='over')
+res(comp_pl)
+W(render, comp_pl, 0)   # top layer first for compositeTOP 'over'
+W(crack_src, comp_pl, 1)
+
+comp_bl = C(compositeTOP, 'comp_bloom', 1940, 240, operand='over')
+res(comp_bl)
+W(render_bloom, comp_bl, 0)
+W(comp_pl, comp_bl, 1)
 
 comp = C(compositeTOP, 'comp_scene', 1940, 300, operand='over')
 res(comp)
-W(render, comp, 0)      # top layer first for compositeTOP 'over'
-W(crack_src, comp, 1)
+W(render_bees, comp, 0)
+W(comp_bl, comp, 1)
 
 # Bloom: pull the bright bits, blur, add back. Cheap and it makes the flowers sing.
 glow_cut = C(levelTOP, 'glow_cut', 1940, 460)

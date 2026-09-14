@@ -185,17 +185,21 @@ Each plant is four instanced layers over one L-System, not just stems:
   shows small and green, then swells and takes on its colour as it opens. Cheaper than
   a separate instancer, and it means the crown is never bare while the plant waits for
   its bloom window.
-- **Flowers** — five-petal blooms with a warm centre.
+- **Flowers** — five-petal blooms with a warm centre, sitting on the **true branch
+  tips** and pushed a little way out along their own branch so the bloom crowns the
+  stem end rather than straddling it.
 
 Foliage and blossom scale with **their own plant**: at a fixed world size the short
 plants read as stacked green chevrons rather than leaves.
 
-Depth ordering matters here and is nearly free. The camera is **orthographic**, so
-translating in z never moves anything on screen — it only decides what occludes what.
-The stems are a 3D spray spanning z −0.20…+0.21, so leaves and blossom sitting at their
-own tip's z had half the plant drawing in front of them, which read as blossom
-*detached* from the stem. Each layer is parked at a fixed depth instead: stems, then
-leaves at 0.30, flowers at 0.45, bees at 0.60.
+**Layer order is done with three render passes, not with depth.** Inside a single
+render TOP the blossom kept losing to the stems no matter what: flowers parked at
+z=3.0 — right against the camera, an order of magnitude in front of stems at z ≤ 0.2 —
+*still* drew behind them, and neither `orderind` nor `sortedblending` changed it.
+Compositing separate passes in 2D is unconditional: `render_plants` (stems + leaves),
+then `render_bloom`, then `render_bees`, each composited strictly over the last. What
+is in front is simply what is composited last. The per-layer z values are kept as a
+sane secondary ordering, but they are not what decides it.
 
 **Moss** creeps out of every crack as `fullness` rises — patchy, broken up by its own
 noise, and settling into the mortar first, so it reads as growth on brick rather than a
@@ -249,6 +253,13 @@ project clean.
 
 ## Things worth knowing if you edit this
 
+- **A branch tip is a node with exactly one segment touching it** — *not* "the last
+  vertex of a prim". Measured on one plant: 82 real tips (degree 1, at heights
+  0.71–1.00 of the plant) against 41 prim end-points, of which exactly **one** was a
+  real tip; the rest were interior junctions at heights 0.55–0.88. Placing flowers on
+  prim ends buried them in the middle of the crown and left the outer stems bare.
+  Build adjacency over every segment and take the degree-1 nodes (dropping the root,
+  which is also degree 1).
 - **Sprite quads must come from a `gridSOP`** (`rows=2, cols=2, texture='rowcol'`).
   `rectangleSOP`'s own `texture` toggle produces no uv attribute at all on this build,
   and a `textureSOP` in `rowcol` mode on a single four-vertex polygon produces garbage:
