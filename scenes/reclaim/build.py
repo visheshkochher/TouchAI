@@ -29,7 +29,7 @@ OUTW, OUTH = 1280, 720
 ASPECT = OUTW / OUTH
 ORTHOW = 2.0                      # camera ortho width -> world x in [-1, 1]
 ORTHOH = ORTHOW / ASPECT          # world y in [-0.5625, 0.5625]
-GENMAX = 6.0                      # L-System generations at full growth
+GENMAX = 5.0                      # L-System generations at full growth
 MAXSITES = 128                    # hard cap on flower sites (all plants combined)
 MAXBEES = 64
 
@@ -132,13 +132,15 @@ for nm, label, val, lo, hi in [
     ('Reactivity', 'Reactivity',        1.0, 0.0, 3.0),
     ('Devgain',    'Device In Gain',    6.0, 1.0, 30.0),
     ('Scenelen',   'Seconds per Plant', 60.0, 10.0, 180.0),
+    ('Refbpm',     'Reference BPM',    120.0, 60.0, 200.0),
+    ('Beatdrive',  'Beat Drive',         1.0, 0.0, 1.0),
     ('Photomix',   'Wall Photo Mix',    0.62, 0.0, 1.0),
     ('Linebright', 'Brick Line Bright', 1.0, 0.0, 3.0),
     ('Crackamt',   'Crack Amount',      1.0, 0.0, 2.0),
     ('Flowersize', 'Flower Size',       1.0, 0.2, 3.0),
     ('Beecount',   'Bee Count',        32.0, 0.0, float(MAXBEES)),
     ('Beespeed',   'Bee Speed',         1.0, 0.0, 3.0),
-    ('Glow',       'Glow',              1.0, 0.0, 3.0),
+    ('Glow',       'Glow',              0.55, 0.0, 3.0),
     ('Vignette',   'Vignette',          0.9, 0.0, 2.0),
 ]:
     pg.appendFloat(nm, label=label)
@@ -154,6 +156,10 @@ for nm, label, val, lo, hi in [
 pg.appendFloat('Timeoffset', label='Time Offset (s)')
 s.par.Timeoffset.normMin, s.par.Timeoffset.normMax = -600.0, 600.0
 s.par.Timeoffset.default = 0.0
+
+pg.appendFloat('Bpm', label='Detected BPM')
+s.par.Bpm.normMin, s.par.Bpm.normMax = 0.0, 200.0
+s.par.Bpm.readOnly = True
 
 pg.appendFloat('Showtime', label='Story Time (s)')
 s.par.Showtime.normMin, s.par.Showtime.normMax = 0.0, 300.0
@@ -251,6 +257,127 @@ timer = C(timerCHOP, 'clock', 0, 1000, lengthunits='seconds', length=CLOCKLEN,
           cycle=True, cyclelimit=False, play=True,
           outfraction=True, outcycle=True, outcycleplusfraction=True)
 
+
+# ---------------------------------------------------------------------------
+# TEMPO — the story runs on musical time, not wall time
+# ---------------------------------------------------------------------------
+tempo_src = C(textDAT, 'tempo_src', 1780, 1240)
+tempo_src.text = '''# Beat detector and tempo estimator. The story advances on musical time, not wall
+# time, so a 140bpm track pushes the plants up noticeably faster than a 90bpm one.
+#
+# Onset detection is done here rather than with a trigger CHOP so the refractory
+# period and the adaptive threshold are explicit and tunable. The level is compared
+# against its own slow EMA, which makes the detector indifferent to how hot the
+# source is - the same reason patterns.md recommends envelope-divide normalisation.
+REF_FLOOR = 0.25       # slowest the story may crawl when the music goes quiet
+REF_CEIL = 2.50
+REFRACTORY = 0.30      # seconds; caps detection at 200bpm and kills double-hits
+SILENCE = 2.5          # seconds without a beat before we decide the music stopped
+
+_state = {'prev': 0.0, 'fluxavg': 0.0, 'last_t': 0.0, 'last_beat': -99.0,
+          'intervals': [], 'factor': 1.0, 'seen': False, 'hist': []}
+
+
+def onCook(scriptOp):
+    src = scriptOp.inputs[0] if len(scriptOp.inputs) > 0 else None
+    clk = scriptOp.inputs[1] if len(scriptOp.inputs) > 1 else None
+    par = scriptOp.parent().par
+    st = _state
+
+    # Peak over the whole time slice, not sample 0: at 60fps a frame carries several
+    # samples and a kick transient can land on any of them.
+    level = 0.0
+    try:
+        level = max(abs(v) for v in src.chan(0).vals)
+    except Exception:
+        pass
+    try:
+        now = float(clk['cycles_plus_fraction'][0]) * %.4f
+    except Exception:
+        now = st['last_t']
+
+    dt = max(0.0, now - st['last_t'])
+    st['last_t'] = now
+
+    # Positive spectral flux, not a level ratio. Comparing the slice peak against an
+    # EMA of the slice peak does not work: the envelope is already smooth, so the
+    # baseline sits at roughly the same height as the signal (measured: baseline 0.77
+    # against a signal maxing at 0.54) and the ratio never clears a threshold. The
+    # RISE is what marks an onset, and it is naturally independent of how loud the
+    # track is.
+    flux = max(0.0, level - st['prev'])
+    st['prev'] = level
+    a = min(1.0, dt / 0.6) if dt > 0 else 0.0
+    st['fluxavg'] += (flux - st['fluxavg']) * a
+    ratio = flux / max(st['fluxavg'], 1e-5)
+
+    # small ring buffer so the detector can be tuned against real numbers
+    st['hist'].append((round(level, 4), round(flux, 5), round(st['fluxavg'], 5)))
+    del st['hist'][:-150]
+
+    beat = 0.0
+    if flux > max(st['fluxavg'] * 1.9, 0.004):
+        if now - st['last_beat'] > REFRACTORY:
+            iv = now - st['last_beat']
+            if 0.32 < iv < 1.30:           # 46..187bpm; ignore gaps outside that
+                # A MEDIAN of recent intervals, not an EMA: one spurious onset
+                # halves an EMA and drags the whole tempo with it, while the median
+                # simply ignores it.
+                st['intervals'].append(iv)
+                del st['intervals'][:-15]
+            st['last_beat'] = now
+            st['seen'] = True
+            beat = 1.0
+
+    ivs = sorted(st['intervals'])
+    median = ivs[len(ivs) // 2] if ivs else 0.5
+    bpm = 60.0 / max(median, 1e-3)
+    bpm = min(200.0, max(50.0, bpm))
+
+    # Before the first beat has ever been heard, sit at 1.0 rather than the silence
+    # floor: the detector needs a few seconds of audio to acquire, and dropping to
+    # 0.25x meanwhile made the show crawl every time the scene was (re)built.
+    quiet = st['seen'] and now - st['last_beat'] > SILENCE
+    if not st['seen']:
+        target = 1.0
+    else:
+        target = REF_FLOOR if quiet else bpm / max(1.0, float(par.Refbpm.eval()))
+    target = min(REF_CEIL, max(REF_FLOOR, target))
+    # ease toward the target so a missed beat cannot jolt the whole story
+    st['factor'] += (target - st['factor']) * min(1.0, dt * 1.5)
+
+    drive = float(par.Beatdrive.eval())
+    factor = 1.0 + (st['factor'] - 1.0) * drive
+
+    scriptOp.clear()
+    chans = [scriptOp.appendChan(n) for n in ('factor', 'bpm', 'beat', 'ratio')]
+    scriptOp.numSamples = 1
+    for c, v in zip(chans, (factor, bpm if (st['seen'] and not quiet) else 0.0,
+                            beat, ratio)):
+        c[0] = v
+    try:
+        par.Bpm.val = bpm if (st['seen'] and not quiet) else 0.0
+    except Exception:
+        pass
+    return
+''' % CLOCKLEN
+
+tempo = C(scriptCHOP, 'tempo', 1940, 1240)
+tempo.par.callbacks = tempo_src.path
+# The 700Hz "bass" band is too wide to count beats with - it carries the bassline
+# and the body of the snare as well as the kick, and detection off it read 175bpm on
+# a ~125bpm track. This is a dedicated kick band, and it feeds nothing else.
+af_kick = C(audiofilterCHOP, 'af_kick', 660, 1020, filter='lowpass')
+soft(af_kick, cutofflog=math.log10(140.0), cutofffrequency=140.0)
+W(gain, af_kick)
+env_kick = C(envelopeCHOP, 'env_kick', 820, 1020, width=0.025)
+W(af_kick, env_kick)
+rs_kick = C(resampleCHOP, 'rs_kick', 980, 1020, method='rate', rate=120,
+            timeslice=True)
+W(env_kick, rs_kick)
+W(rs_kick, tempo, 0)
+W(timer, tempo, 1)
+
 # ---------------------------------------------------------------------------
 # DIRECTOR — the whole show's state in one 1-sample CHOP.
 # ---------------------------------------------------------------------------
@@ -261,7 +388,14 @@ dir_src.text = '''# Director: turns one monotonic clock + the audio bands into e
 # `scenelen`-long window of it and simply holds its finished state afterwards.
 NPLANTS = %d
 CLOCKLEN = %.4f
-TAIL = 0.30        # extra scene-lengths of full garden before the story loops
+TAIL = 0.30        # extra scene-lengths of held full garden at the end
+
+
+# Musical time is integrated here rather than with a speed CHOP: the CHOP's
+# accumulator did not survive being cooked on demand (it read 0.18s after a minute
+# of running), and dt is derived from the wall clock so cooking this script twice in
+# one frame adds nothing the second time.
+_clock = {'last_raw': None, 'musical': 0.0}
 
 
 def smooth(t):
@@ -287,22 +421,39 @@ def chan(inp, name, default=0.0):
 def onCook(scriptOp):
     tmr = scriptOp.inputs[0] if len(scriptOp.inputs) > 0 else None
     aud = scriptOp.inputs[1] if len(scriptOp.inputs) > 1 else None
+    mus = scriptOp.inputs[2] if len(scriptOp.inputs) > 2 else None
     par = scriptOp.parent().par
 
-    # Monotonic seconds since TD started. Never seeked, so bee orbits and plant sway
-    # run off this and stay continuous across a checkpoint jump.
+    # Wall seconds. Bee orbits and plant sway run off this so they stay smooth and
+    # physical even if the tempo estimate wobbles.
     raw = chan(tmr, 'cycles_plus_fraction', 0.0) * CLOCKLEN
+    # Musical seconds: the integral of the tempo factor, so it runs fast on a quick
+    # track and slow on a mellow one. Monotonic, which is what lets a seek stay a
+    # plain subtraction.
+    factor = chan(mus, 'factor', 1.0)
+    if _clock['last_raw'] is None:
+        _clock['last_raw'] = raw
+    dt = raw - _clock['last_raw']
+    if dt < 0.0:
+        dt = 0.0
+    _clock['last_raw'] = raw
+    _clock['musical'] += dt * factor
+    musical = _clock['musical']
 
     scenelen = max(1.0, float(par.Scenelen.eval()))
-    storylen = scenelen * (NPLANTS + TAIL)
-    show = (raw - float(par.Timeoffset.eval())) %% storylen
+    storyend = scenelen * (NPLANTS + TAIL)
+    # Clamped, NOT wrapped: the garden is the end of the story and it stays on screen
+    # until someone seeks back to an earlier checkpoint and lets it grow again.
+    show = min(storyend, max(0.0, musical - float(par.Timeoffset.eval())))
 
     bass = chan(aud, 'bass', 0.0)
     high = chan(aud, 'high', 0.0)
     energy = chan(aud, 'energy', 0.0)
 
-    out = {'rawtime': raw, 'show': show, 'ctime': raw,
+    out = {'rawtime': raw, 'musical': musical, 'show': show, 'ctime': raw,
+           'tempofactor': factor,
            'scene': float(int(show / scenelen)),
+           'done': 1.0 if show >= storyend - 1e-3 else 0.0,
            'bass': bass, 'high': high, 'energy': energy}
 
     # Bass makes whatever is currently growing surge; it never runs backwards.
@@ -348,6 +499,7 @@ director = C(scriptCHOP, 'director', 1940, 1120)
 director.par.callbacks = dir_src.path
 W(timer, director, 0)
 W(null_audio, director, 1)
+W(tempo, director, 2)
 
 
 def D(ch):
@@ -514,7 +666,7 @@ for i, (px, py, _h, seed) in enumerate(PLANTS):
     getattr(crack_src.par, 'vec%dvaluex' % i).val = 0.5 + px / ORTHOW
     getattr(crack_src.par, 'vec%dvaluey' % i).val = 0.5 + py / ORTHOH
     getattr(crack_src.par, 'vec%dvaluez' % i).expr = (
-        "0.03 + 0.30 * %s" % D('crack%d' % i))
+        "0.02 + 0.22 * %s" % D('crack%d' % i))
     getattr(crack_src.par, 'vec%dvaluew' % i).expr = (
         "1.0 if %s > 0.001 else 0.0" % D('crack%d' % i))
 
@@ -533,9 +685,13 @@ crack_src.par.vec5valuex.expr = "parent().par.Vignette"
 rules = C(textDAT, 'plant_rules', 0, 100)
 # Classic bushy plant (Prusinkiewicz & Lindenmayer, fig 1.24d). Note the Rules DAT
 # wants NO space after ':' or '=' — with one it silently produces zero geometry.
-# Rule C. The textbook `F=FF` bush grows a long bare stick before it branches at all
-# (measured: zero spread over the bottom 30%); this one branches from the base up.
-rules.text = "premise:A\nA=F[+A]F[-A]A\n"
+# A spray, not a shrub. Measured by what fraction of branch tips land in the top
+# third of the plant - i.e. how much it reads as a bunch rather than a bush:
+#   A=F[+A]F[-A]A      (the old shrub)  0.18  - flowers scattered all over
+#   A=FF[+A][-A]                        0.52
+#   A=F[++A][--A]A     (this one)       0.84  - stems fan up and bloom in a crown
+# The FFFF premise is the bare stem rising out of the crack before it fans.
+rules.text = "premise:FFFFA\nA=F[++A][--A]~(9)A\n"
 
 # Tubes, not a wireframe skeleton: flat constant-width lines read as a wire mesh no
 # matter what colour they are, while lit tapered tubes read as stems. 12k points at
@@ -563,21 +719,21 @@ plant_scales = []
 for i, (px, py, height, seed) in enumerate(PLANTS):
     y = 100 - i * 170
     ls = C(lsystemSOP, 'plant%d_lsys' % i, 170, y, type='tube',
-           angleinit=19.0, stepinit=0.1, stepscale=0.88, gravity=0.05,
-           randscale=0.24, randseed=seed, contangl=True, contlength=True,
-           # thickinit is scaled by the step size, not by plant height. Measured as
-           # rendered silhouette coverage for one plant: 0.02 -> 0.7%, 0.06 -> 4.6%,
-           # 0.30 -> 16% (a solid green blob). 0.06 keeps the branching legible.
-           contwidth=True, thickinit=0.06, thickscale=0.80,
-           rows=3, cols=5, smooth=0.35)
+           angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+           randscale=0.30, randseed=seed, contangl=True, contlength=True,
+           # 81 long stems converge at the crown, so they merge into a solid canopy
+           # far sooner than 729 lacy branchlets did: measured silhouette coverage
+           # 0.05 -> 0.8%, 0.08 -> 1.8%, 0.16 -> 4.0% (solid green mushroom).
+           contwidth=True, thickinit=0.075, thickscale=0.88,
+           rows=3, cols=6, smooth=0.4)
     ls.par.rules = rules.path
     ls.par.generations.expr = "%.2f * %s" % (GENMAX, D('grow%d' % i))
 
     # A second, static copy at full growth: flower sites are read off this, so they
     # stay put while the animated one grows. Constant params -> cooks once.
     lsf = C(lsystemSOP, 'plant%d_full' % i, 170, y - 80, type='skel',
-            angleinit=19.0, stepinit=0.1, stepscale=0.88, gravity=0.05,
-            randscale=0.24, randseed=seed, contangl=True, contlength=True,
+            angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+            randscale=0.30, randseed=seed, contangl=True, contlength=True,
             generations=GENMAX)
     lsf.par.rules = rules.path
     lsf.cook(force=True)
@@ -591,10 +747,10 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     # the plant is grown the animated L-System is not evaluated at all. With four
     # plants that is the difference between ~4ms and ~1ms of L-System per frame.
     lsg = C(lsystemSOP, 'plant%d_grown' % i, 170, y - 160, type='tube',
-            angleinit=19.0, stepinit=0.1, stepscale=0.88, gravity=0.05,
-            randscale=0.24, randseed=seed, contangl=True, contlength=True,
-            contwidth=True, thickinit=0.06, thickscale=0.80,
-            rows=3, cols=5, smooth=0.35, generations=GENMAX)
+            angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+            randscale=0.30, randseed=seed, contangl=True, contlength=True,
+            contwidth=True, thickinit=0.075, thickscale=0.88,
+            rows=3, cols=6, smooth=0.4, generations=GENMAX)
     lsg.par.rules = rules.path
 
     swi = C(switchSOP, 'plant%d_switch' % i, 340, y - 80)
@@ -603,7 +759,13 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     swi.par.input.expr = "1 if %s >= 0.999 else 0" % D('grow%d' % i)
 
     geo = C(geometryCOMP, 'plant%d_geo' % i, 340, y, tx=px, ty=py, tz=0.0)
-    geo.par.sx = geo.par.sy = geo.par.sz = scl
+    # The premise (FFFF) is drawn even at generations 0, so a plant that has not
+    # started yet would still show a bare stem standing on the bare wall. Scaling the
+    # whole COMP up over the first few percent of growth both hides it beforehand and
+    # reads as the stem pushing up out of the crack.
+    emerge = "min(1.0, %s / 0.06)" % D('grow%d' % i)
+    for axis in ('sx', 'sy', 'sz'):
+        getattr(geo.par, axis).expr = "%.6f * %s" % (scl, emerge)
     geo.par.material = stem_mat.path
     # A slow sway that leans with the music.
     geo.par.rz.expr = ("2.6 * math.sin(%s * (0.31 + %0.3f) + %0.2f) * (0.5 + %s)"
@@ -647,13 +809,13 @@ def onCook(scriptOp):
             ends.append((P[0], P[1], P[2]))
         if not ends:
             continue
-        # Prefer the highest tips, then thin evenly so flowers spread over the plant.
+        # Take the HIGHEST tips outright rather than sampling evenly down the plant:
+        # this rule carries its tips in a crown, and the flowers should bunch there
+        # too. An even spread scatters blossom down the bare stems and loses the
+        # bouquet.
         ends.sort(key=lambda p: -p[1])
         budget = max(1, MAXSITES // max(1, len(PLANTS)))
-        step = max(1, len(ends) // budget)
-        for k in range(0, len(ends), step):
-            if len([p for p in pts if p[4] == pid]) >= budget:
-                break
+        for k in range(min(budget, len(ends))):
             ex, ey, ez = ends[k]
             wx = px + ex * scl
             wy = py + ey * scl
@@ -741,7 +903,7 @@ def onCook(scriptOp):
 
     # overshoot then settle - flowers pop rather than fade in
     pop = 1.0 + 0.35 * np.sin(np.clip(local, 0.0, 1.0) * np.pi) * (1.0 - local)
-    scale = local * allowed * pop * (0.026 + 0.020 * np.mod(rnd * 3.7, 1.0)) * size
+    scale = local * allowed * pop * (0.030 + 0.022 * np.mod(rnd * 3.7, 1.0)) * size
     scale = scale * (1.0 + 0.16 * bass)
 
     sway = 0.012 * np.sin(t * 0.9 + rnd * 12.0) * local
@@ -753,7 +915,7 @@ def onCook(scriptOp):
     cr = 1.00 - 0.06 * h
     cg = 0.86 - 0.46 * h + 0.08 * energy
     cb = 0.58 - 0.16 * h + 0.12 * np.mod(rnd * 5.1, 1.0)
-    lift = (0.90 + 0.25 * energy)
+    lift = (0.80 + 0.20 * min(1.0, energy))
 
     scriptOp.numSamples = n
     data = [tx + sway, ty, tz + 0.02, scale, scale, scale, rot,
@@ -1058,12 +1220,12 @@ CHECKPOINTS = %r
 
 
 def _seek(comp, seconds):
+    # Seeking is a subtraction on the playhead, never a transport command - which is
+    # why the story carries on playing from wherever it lands. Measured against
+    # MUSICAL time, so a checkpoint means the same place in the story at any tempo.
     d = comp.op('director')
-    raw = float(d['rawtime'][0]) if d is not None and d.numChans else 0.0
-    # Land a hair PAST the target. Timeoffset is a 32-bit float par, so seeking to
-    # exactly 0 rounds to a tiny negative, and (tiny negative %% storylen) wraps to
-    # the very end of the story - the bare wall would come back as the full garden.
-    comp.par.Timeoffset = raw - seconds - 0.02
+    mus = float(d['musical'][0]) if d is not None and d.numChans else 0.0
+    comp.par.Timeoffset = mus - seconds
 
 
 def _current_index(comp):
@@ -1135,6 +1297,22 @@ def onShortcut(dat, shortcutName, time):
     return
 ''' % (CHECKPOINTS,)
 
+frame_exec = C(executeDAT, 'frame_exec', 2100, 1000)
+frame_exec.text = '''# TD only cooks what something is pulling on. With the scene's output not on screen,
+# nothing pulls the director, so the story clock and the beat detector simply stop -
+# measured: cookFrame stuck at 246 while the project was on frame 374990. Cooking the
+# director once per frame keeps musical time and tempo detection running regardless of
+# what is being displayed, and costs one CHOP cook.
+
+
+def onFrameStart(frame):
+    d = op('director')
+    if d is not None:
+        d.cook()
+    return
+'''
+soft(frame_exec, framestart=True)
+
 s.par.display = True
 s.par.opviewer = final_out.path
 
@@ -1143,8 +1321,7 @@ timer.par.start.pulse()
 # Start the story at the bare wall rather than wherever TD's uptime happens to sit.
 director.cook(force=True)
 try:
-    # minus the same epsilon as _seek, for the same float32 wrap reason
-    s.par.Timeoffset = float(director['rawtime'][0]) - 0.02
+    s.par.Timeoffset = float(director['musical'][0])
 except Exception:
     s.par.Timeoffset = 0.0
 

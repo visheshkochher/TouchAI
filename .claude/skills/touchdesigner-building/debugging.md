@@ -130,6 +130,57 @@ Check them first when an operator is mysteriously inert.
   `hasattr(op.par, name)` and prints what it skipped. Names that have bitten this repo:
   levelTOP has no `saturation`; lineMAT colour is `linenearcolorr/g/b`, not `colorr`.
 
+## "My scene stopped running" — TD only cooks what is pulled
+
+TD is demand-driven: an operator cooks because something downstream needs it. If the
+scene's output is not on screen — no viewer, no perform window, not the active pane —
+**nothing pulls the network and it silently stops**. Symptoms: a Script CHOP that
+accumulates state never advances, a beat detector never sees a beat, timers appear
+frozen, `observe` shows a correct image (because observe itself forces a cook) but
+anything between observes never happened.
+
+Diagnose in one call — compare `cookFrame` against the project frame:
+
+```python
+print(absTime.frame, [ (o.name, o.cookFrame) for o in parent().children ])
+```
+
+A whole subtree stuck on the same low `cookFrame` while `absTime.frame` is in the
+hundreds of thousands means it is idle, not broken. (`cookFrame` of -1 means the op has
+never cooked at all.)
+
+Fix: for anything that must keep time regardless of what is displayed — a story clock,
+a tempo detector, an accumulator — add an **Execute DAT** with `onFrameStart` that
+cooks the one endpoint op:
+
+```python
+def onFrameStart(frame):
+    op('director').cook()
+```
+
+This also matters for testing over MCP: between `observe` calls the scene is idle, so
+any measurement of "what happened over the last N seconds" is measuring nothing.
+
+### Accumulators: integrate in a Script CHOP, not a Speed CHOP
+
+A `speedCHOP` integrating a rate looked like the natural way to build a monotonic
+clock, but its accumulator did not survive being cooked on demand — it read 0.18s after
+a minute of running. Integrating explicitly in the Script CHOP that consumes it is
+both reliable and debuggable:
+
+```python
+_clock = {'last': None, 'total': 0.0}
+...
+if _clock['last'] is None:
+    _clock['last'] = now
+dt = max(0.0, now - _clock['last'])
+_clock['last'] = now
+_clock['total'] += dt * rate
+```
+
+Deriving `dt` from a wall-clock source (rather than assuming one frame per cook) makes
+it idempotent: cooking the script twice in one frame adds nothing the second time.
+
 ## Diagnosis Steps
 
 ### 1. Check for errors

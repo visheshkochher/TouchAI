@@ -5,7 +5,7 @@ Nature takes a brick wall back.
 One continuous story, about four minutes long: a photographed brick wall is edge-traced
 to its mortar outlines, a crack opens, an L-System plant pushes through it, grows,
 blooms and draws bees — then a second plant cracks its own brick and does the same,
-then a third, then a fourth, until the wall is a garden. Then it loops.
+then a third, then a fourth, until the wall is a garden — and the garden stays.
 
 Build with:
 
@@ -22,13 +22,23 @@ Needs `media/brick-wall.png`. The path list at the top of `build.py`
 
 ## The story
 
-There is no stage machine and nothing loops except the whole arc. The show is a single
-playhead, `show`, in seconds since the wall was bare:
+There is no stage machine and nothing loops. The show is a single playhead, `show`,
+in story-seconds since the wall was bare:
 
 ```
-show = (monotonic clock − Timeoffset) mod storylen
-storylen = Scenelen × (plants + 0.3)      # 60 × 4.3 = 258s by default
+show = clamp(musical time − Timeoffset, 0, storyend)
+storyend = Scenelen × (plants + 0.3)      # 60 × 4.3 = 258s by default
 ```
+
+**The ending persists.** `show` is clamped, not wrapped: once the fourth plant has
+bloomed the full garden simply stays on screen (`done` goes to 1) until someone seeks
+back to an earlier checkpoint, from which it grows forward again.
+
+**Story time is musical time, not wall time.** A beat detector estimates the tempo and
+the story advances at `bpm / Refbpm`, so a 140bpm track pushes the plants up noticeably
+faster than a 90bpm one, and `Scenelen` is "seconds per plant *at the reference
+tempo*". `Beatdrive` blends between constant speed (0) and full tempo-following (1).
+See Tempo below.
 
 Plant *i* owns the window `[i·Scenelen, (i+1)·Scenelen]` and holds its finished state
 afterwards. Within its own 60 seconds:
@@ -36,11 +46,11 @@ afterwards. Within its own 60 seconds:
 | fraction | seconds | what happens |
 |---|---|---|
 | 0.02 – 0.22 | 1 – 13 | the crack spreads and the brick breaks open |
-| 0.12 – 0.62 | 7 – 37 | the stem grows (L-System `generations` 0 → 6) |
+| 0.12 – 0.62 | 7 – 37 | the stem grows (L-System `generations` 0 → 5) |
 | 0.52 – 0.80 | 31 – 48 | flowers open, each on its own delay |
 | 0.68 – 0.95 | 41 – 57 | bees fly in from off-frame and orbit the flowers |
 
-The trailing `0.3 × Scenelen` is a held full-garden tail before the story restarts.
+The trailing `0.3 × Scenelen` is the held full-garden ending.
 Every later scene also keeps adding flowers to the plants already standing (`dens0..3`),
 so the wall keeps thickening rather than just accumulating stems.
 
@@ -63,12 +73,18 @@ the following twelve seconds rather than a static cracked wall.
 | `9` | `Gogarden` | full garden, all four plants | 235.2 |
 | `0` | `Restart` | back to the bare wall, playing | 0 |
 
+Because the ending holds rather than looping, the keys are also how you get *out* of the
+finished garden: press `7` and the first two plants stay standing while the third
+cracks its brick and grows again from there.
+
 Seconds shown are at the default `Scenelen` of 60; they scale with it. `Nextcp` and
 `Prevcp` step through the list — those are the ones to bind to a footswitch or MIDI pad.
 
 Seeking is a subtraction on `Timeoffset`, not a transport command: nothing is ever
-paused, which is exactly why playback resumes by itself. The master clock free-runs and
-is never seeked, so bee orbits and plant sway stay continuous across a jump.
+paused, which is exactly why playback resumes by itself. Checkpoints are measured in
+*musical* time, so a given checkpoint means the same place in the story at any tempo.
+Bee orbits and plant sway run off the wall clock instead, so they stay smooth and
+physical across a jump and are not disturbed if the tempo estimate wobbles.
 
 `Showtime` on the COMP is a read-only mirror of the playhead, handy while performing.
 
@@ -81,7 +97,10 @@ On the `reclaim` COMP, page **Reclaim**:
 | `Audiosrc` | Audio Device In (performance) or TD's bundled track (testing) |
 | `Reactivity` | overall audio gain into the band chain |
 | `Devgain` | extra gain applied to device input only — a mic sits far below a decoded file |
-| `Scenelen` | seconds for one plant's full arc (default 60) |
+| `Scenelen` | seconds for one plant's full arc at the reference tempo (default 60) |
+| `Refbpm` | tempo at which `Scenelen` is literal (default 120) |
+| `Beatdrive` | 0 = constant speed, 1 = fully tempo-driven |
+| `Bpm` | read-only detected tempo (0 when the beat is lost) |
 | `Photomix` | how much of the brick photograph shows under the traced outlines |
 | `Linebright` | brightness of the traced mortar grid |
 | `Crackamt` | crack strength |
@@ -94,6 +113,31 @@ On the `reclaim` COMP, page **Reclaim**:
 | `Gostart` … `Gogarden` | seek to a checkpoint |
 | `Nextcp` / `Prevcp` | step between checkpoints |
 | `Restart` | back to the bare wall |
+
+## Tempo
+
+`tempo` is a Script CHOP doing onset detection on a **dedicated kick band** — a
+lowpass at 140Hz that feeds nothing else. The main 700Hz "bass" band is too wide to
+count beats with: it carries the bassline and the body of the snare too, and detection
+off it read 175bpm on a ~125bpm track.
+
+Two choices in there are worth keeping:
+
+- **Positive flux, not a level ratio.** Comparing the slice peak against an EMA of the
+  slice peak does not work — the envelope is already smooth, so the baseline sits at
+  roughly the same height as the signal (measured: baseline 0.77 against a signal
+  maxing at 0.54) and the ratio never clears a threshold. The *rise* is what marks an
+  onset, and it is naturally independent of how loud the track is.
+- **Median of recent intervals, not an EMA.** One spurious onset halves an EMA and
+  drags the whole story speed with it; the median just ignores it. On the bundled test
+  track the collected intervals run
+  `[0.35, 0.37, 0.37, 0.37, 0.38, 0.40, 0.43, 0.48, 0.48, 0.48, 0.48, 0.50, 0.58, 0.67, 0.70]`
+  — the median picks 0.483s = **124.1 bpm**, which is right, while the mean would not be.
+
+Before the first beat is ever heard the factor sits at 1.0 rather than the silence
+floor, so the show does not crawl for the first few seconds after a build. After ~2.5s
+with no beats it eases down to 0.25× rather than stopping. `Bpm` on the COMP shows the
+current estimate (0 when it has lost the beat).
 
 ## Audio mapping
 
@@ -152,8 +196,13 @@ project clean.
   L-Systems stays frozen across thousands of frames at the garden checkpoint.
 - `wall_crack` is one full-res GLSL pass (~0.8–1.1 ms GPU) that does all four cracks
   *and* the wall's final grade, rather than a stack of TOPs.
-- The three Script CHOPs (`director`, `flower_inst`, `bee_inst`) replace roughly forty
-  CHOPs of envelope maths and run numpy over fewer than 250 samples per frame.
+- The Script CHOPs (`director`, `tempo`, `flower_inst`, `bee_inst`) replace roughly
+  forty CHOPs of envelope maths and run numpy over fewer than 250 samples per frame.
+- `frame_exec` cooks the director once per frame. **TD only cooks what something is
+  pulling on**, and with the scene's output not on screen nothing pulls the director,
+  so the story clock and the beat detector simply stop — measured, `cookFrame` stuck at
+  246 while the project was on frame 374990. This keeps musical time and tempo
+  detection running whatever is being displayed, for the price of one CHOP cook.
 
 ## Things worth knowing if you edit this
 
