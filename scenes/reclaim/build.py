@@ -1,9 +1,14 @@
 # Reclaim — nature takes a brick wall back.
 #
-# A photographed brick wall is edge-traced to its mortar outlines. Audio drives a
-# crack that spreads from a seed point, bricks darken and break, an L-System plant
-# pushes through the gap, grows, blooms, and bees arrive at the flowers. Every cycle
-# wakes another plant and thickens the garden.
+# One continuous story, not a loop of stages. A photographed brick wall is edge-traced
+# to its mortar outlines. A crack opens, an L-System plant pushes through it, grows,
+# blooms and draws bees — and then a second plant cracks its own brick and does the
+# same, then a third, then a fourth, until the wall is a garden. Each plant's scene
+# takes `Scenelen` seconds (60 by default), so the whole arc runs about four minutes
+# before it loops.
+#
+# Keys 1-9 are *checkpoints*, not freeze-frames: pressing one seeks the story to that
+# moment and playback carries on from there.
 #
 # Idempotent: destroys and recreates /project1/reclaim (and its project-level Out TOP)
 # and touches nothing else. Run via the MCP `run` tool:
@@ -25,20 +30,26 @@ ASPECT = OUTW / OUTH
 ORTHOW = 2.0                      # camera ortho width -> world x in [-1, 1]
 ORTHOH = ORTHOW / ASPECT          # world y in [-0.5625, 0.5625]
 GENMAX = 6.0                      # L-System generations at full growth
-MAXSITES = 96                     # hard cap on flower sites (all plants combined)
-MAXBEES = 48
+MAXSITES = 128                    # hard cap on flower sites (all plants combined)
+MAXBEES = 64
 
-# The scene's six moments, as (cycle, phase-within-cycle). Selectable live from keys
-# 1-6, from the Stage pulses, or left on 'auto' to run the whole arc on a loop.
-# Holding a stage pins the cycle too: at cycle 3 every plant is already grown, so
-# "bare wall" would not be bare if it only pinned the phase.
-STAGES = [
-    ('wall',   ' 1 - Bare Wall',   0, 0.02),
-    ('crack',  ' 2 - Cracking',    0, 0.22),
-    ('grow',   ' 3 - Growing',     0, 0.50),
-    ('bloom',  ' 4 - Bloom',       0, 0.80),
-    ('bees',   ' 5 - Bees',        0, 0.99),
-    ('garden', ' 6 - Full Garden', 3, 0.99),
+# Master clock period. The clock timer free-runs and cycles on this, and
+# cycles_plus_fraction * CLOCKLEN is a monotonic seconds counter that the story time
+# is measured against. Independent of Scenelen so retiming the show never jumps it.
+CLOCKLEN = 60.0
+
+# Checkpoints, in multiples of Scenelen. Pressing one SEEKS the story there and lets
+# it keep running — these are chapter marks, not freeze-frames.
+CHECKPOINTS = [
+    ('start',  ' 1 - Bare Wall',      0.00),
+    ('crack',  ' 2 - First Crack',    0.02),
+    ('grow',   ' 3 - Sprout & Grow',  0.14),
+    ('bloom',  ' 4 - First Bloom',    0.50),
+    ('bees',   ' 5 - Bees Arrive',    0.66),
+    ('second', ' 6 - Second Plant',   1.00),
+    ('third',  ' 7 - Third Plant',    2.00),
+    ('fourth', ' 8 - Fourth Plant',   3.00),
+    ('garden', ' 9 - Full Garden',    3.92),
 ]
 
 # Where the brick wall photo lives. First existing path wins.
@@ -55,10 +66,12 @@ WALL_CANDIDATES = [
 # changing the rules never silently rescales the garden.
 # Bases sit well inside the frame, not on the floor line: a crack centred at the
 # bottom edge loses half its disc off-screen and stops reading as a break in the wall.
+# Four plants, staggered in height so the garden does not read as a row.
 PLANTS = [
-    (-0.56, -0.28, 0.72, 3),
-    (0.06, -0.40, 0.60, 11),
-    (0.62, -0.16, 0.48, 27),
+    (-0.70, -0.30, 0.70, 3),
+    (-0.22, -0.47, 0.58, 11),
+    (0.26, -0.19, 0.52, 27),
+    (0.72, -0.44, 0.46, 41),
 ]
 
 proj = op('/project1')
@@ -118,12 +131,12 @@ s.par.Audiosrc = 'file'
 for nm, label, val, lo, hi in [
     ('Reactivity', 'Reactivity',        1.0, 0.0, 3.0),
     ('Devgain',    'Device In Gain',    6.0, 1.0, 30.0),
-    ('Cyclelen',   'Cycle Length (s)', 20.0, 6.0, 60.0),
+    ('Scenelen',   'Seconds per Plant', 60.0, 10.0, 180.0),
     ('Photomix',   'Wall Photo Mix',    0.62, 0.0, 1.0),
     ('Linebright', 'Brick Line Bright', 1.0, 0.0, 3.0),
     ('Crackamt',   'Crack Amount',      1.0, 0.0, 2.0),
     ('Flowersize', 'Flower Size',       1.0, 0.2, 3.0),
-    ('Beecount',   'Bee Count',        24.0, 0.0, float(MAXBEES)),
+    ('Beecount',   'Bee Count',        32.0, 0.0, float(MAXBEES)),
     ('Beespeed',   'Bee Speed',         1.0, 0.0, 3.0),
     ('Glow',       'Glow',              1.0, 0.0, 3.0),
     ('Vignette',   'Vignette',          0.9, 0.0, 2.0),
@@ -134,20 +147,23 @@ for nm, label, val, lo, hi in [
     par.default = val
     par.val = val
 
-# --- stage selection -------------------------------------------------------
-# 'auto' runs the arc on the cycle timer; any other value pins the scene to that
-# moment while the clock keeps running underneath, so bees and sway stay alive.
-pg.appendMenu('Stage', label='Stage')
-s.par.Stage.menuNames = ['auto'] + [st[0] for st in STAGES]
-s.par.Stage.menuLabels = [' 0 - Auto Cycle'] + [st[1] for st in STAGES]
-s.par.Stage.default = 'auto'
-s.par.Stage = 'auto'
+# --- checkpoints -----------------------------------------------------------
+# Timeoffset is the story's playhead: showtime = monotonic clock - Timeoffset.
+# Seeking is just a subtraction, which is why a checkpoint resumes playing instead
+# of freezing — nothing is paused, the playhead simply moves.
+pg.appendFloat('Timeoffset', label='Time Offset (s)')
+s.par.Timeoffset.normMin, s.par.Timeoffset.normMax = -600.0, 600.0
+s.par.Timeoffset.default = 0.0
 
-for st, label, _c, _f in STAGES:
-    pg.appendPulse('Go' + st, label=label)
-pg.appendPulse('Goauto', label=' 0 - Auto Cycle')
-pg.appendPulse('Nextstage', label='Next Stage')
-pg.appendPulse('Restart', label='Restart Cycle')
+pg.appendFloat('Showtime', label='Story Time (s)')
+s.par.Showtime.normMin, s.par.Showtime.normMax = 0.0, 300.0
+s.par.Showtime.readOnly = True
+
+for cp, label, _mult in CHECKPOINTS:
+    pg.appendPulse('Go' + cp, label=label)
+pg.appendPulse('Nextcp', label='Next Checkpoint')
+pg.appendPulse('Prevcp', label='Previous Checkpoint')
+pg.appendPulse('Restart', label=' 0 - Restart Story')
 
 # ---------------------------------------------------------------------------
 # AUDIO IN — device for performance, TD's bundled track for testing
@@ -226,27 +242,26 @@ null_audio = C(nullCHOP, 'null_audio', 1620, 1300)
 W(bands, null_audio)
 
 # ---------------------------------------------------------------------------
-# CYCLE CLOCK — one timerCHOP, free-running, cycling forever.
-# outcycleplusfraction is monotonic, so the director gets a continuous clock from it
-# and never depends on the project timeline range.
+# MASTER CLOCK — one timerCHOP, free-running, cycling forever, never seeked.
+# cycles_plus_fraction is monotonic, so it gives a continuous seconds counter that
+# does not depend on the project timeline range. The story's playhead is this minus
+# Timeoffset, so seeking never touches the clock itself.
 # ---------------------------------------------------------------------------
-timer = C(timerCHOP, 'cycle_timer', 0, 1000, lengthunits='seconds',
+timer = C(timerCHOP, 'clock', 0, 1000, lengthunits='seconds', length=CLOCKLEN,
           cycle=True, cyclelimit=False, play=True,
           outfraction=True, outcycle=True, outcycleplusfraction=True)
-timer.par.length.expr = "parent().par.Cyclelen"
 
 # ---------------------------------------------------------------------------
 # DIRECTOR — the whole show's state in one 1-sample CHOP.
 # ---------------------------------------------------------------------------
 dir_src = C(textDAT, 'director_src', 1780, 1120)
-dir_src.text = '''# Director: turns the cycle timer + audio bands into every envelope the scene needs.
-# Stage > 0 pins (cycle, phase) to one moment of the arc; ctime keeps running off the
-# free-wheeling timer either way, so held scenes still breathe.
-# Phase windows within a cycle:
-#   crack 0.00-0.24   grow 0.14-0.60   bloom 0.50-0.80   bees 0.66-1.00
-# Plant i is born on cycle i; from cycle i+1 on it simply stays grown.
+dir_src.text = '''# Director: turns one monotonic clock + the audio bands into every envelope the
+# scene needs. There is no cycling stage machine here - the whole show is a single
+# playhead, `show`, measured in seconds since the wall was bare. Each plant owns a
+# `scenelen`-long window of it and simply holds its finished state afterwards.
 NPLANTS = %d
-STAGES = %r
+CLOCKLEN = %.4f
+TAIL = 0.30        # extra scene-lengths of full garden before the story loops
 
 
 def smooth(t):
@@ -274,54 +289,45 @@ def onCook(scriptOp):
     aud = scriptOp.inputs[1] if len(scriptOp.inputs) > 1 else None
     par = scriptOp.parent().par
 
-    frac = chan(tmr, 'timer_fraction', chan(tmr, 'fraction', 0.0))
-    cyc = chan(tmr, 'cycles', chan(tmr, 'timer_cycles', 0.0))
-    cyc_frac = chan(tmr, 'cycles_plus_fraction',
-                    chan(tmr, 'timer_cycles_fraction', cyc + frac))
+    # Monotonic seconds since TD started. Never seeked, so bee orbits and plant sway
+    # run off this and stay continuous across a checkpoint jump.
+    raw = chan(tmr, 'cycles_plus_fraction', 0.0) * CLOCKLEN
 
-    cyclen = float(par.Cyclelen.eval())
-    # ctime is deliberately taken from the un-pinned timer: a held stage still needs a
-    # running clock for the bees to orbit on and the plants to sway.
-    ctime = cyc_frac * cyclen
-
-    stage = int(par.Stage.menuIndex)
-    if 0 < stage <= len(STAGES):
-        cyc, frac = STAGES[stage - 1]
+    scenelen = max(1.0, float(par.Scenelen.eval()))
+    storylen = scenelen * (NPLANTS + TAIL)
+    show = (raw - float(par.Timeoffset.eval())) %% storylen
 
     bass = chan(aud, 'bass', 0.0)
     high = chan(aud, 'high', 0.0)
     energy = chan(aud, 'energy', 0.0)
 
-    cyc_i = int(cyc)
-    out = {'phase': frac, 'cycle': float(cyc_i), 'ctime': ctime,
+    out = {'rawtime': raw, 'show': show, 'ctime': raw,
+           'scene': float(int(show / scenelen)),
            'bass': bass, 'high': high, 'energy': energy}
 
-    # Bass makes the current growth surge; it never runs backwards.
+    # Bass makes whatever is currently growing surge; it never runs backwards.
     surge = 1.0 + 0.45 * bass
 
     for i in range(NPLANTS):
-        born = cyc_i - i            # <0 not yet, 0 this cycle, >0 already grown
-        if born < 0:
+        p = (show - i * scenelen) / scenelen     # <0 not yet, 0..1 its scene, >1 done
+        if p < 0.0:
             crack = grow = bloom = bee = 0.0
-        elif born == 0:
-            crack = env(frac, 0.00, 0.24)
-            grow = min(1.0, env(frac, 0.14, 0.60) * surge)
-            bloom = env(frac, 0.50, 0.80)
-            bee = env(frac, 0.66, 1.00)
+        elif p <= 1.0:
+            crack = env(p, 0.02, 0.22)
+            grow = min(1.0, env(p, 0.12, 0.62) * surge)
+            bloom = env(p, 0.52, 0.80)
+            bee = env(p, 0.68, 0.95)
         else:
-            crack = 1.0
-            grow = 1.0
-            bloom = 1.0
-            bee = 1.0
+            crack = grow = bloom = bee = 1.0
         out['crack%%d' %% i] = crack
         out['grow%%d' %% i] = grow
         out['bloom%%d' %% i] = bloom
         out['bee%%d' %% i] = bee
-        # Later cycles keep adding flowers to plants that are already there.
-        out['dens%%d' %% i] = min(1.0, 0.40 + 0.20 * max(0, born))
+        # Every later scene keeps adding flowers to the plants already standing.
+        out['dens%%d' %% i] = min(1.0, 0.45 + 0.16 * max(0.0, p - 1.0))
 
-    # How full the garden is overall, 0..1 — drives bee count and glow.
-    out['fullness'] = min(1.0, (cyc_i + frac) / float(NPLANTS + 1))
+    # How full the garden is overall, 0..1 - drives bee count and glow.
+    out['fullness'] = min(1.0, show / (NPLANTS * scenelen))
 
     scriptOp.clear()
     keys = sorted(out.keys())
@@ -329,8 +335,14 @@ def onCook(scriptOp):
     scriptOp.numSamples = 1
     for c, k in zip(chans, keys):
         c[0] = out[k]
+
+    # Mirrored onto a read-only par so the playhead is visible while performing.
+    try:
+        par.Showtime.val = show
+    except Exception:
+        pass
     return
-''' % (len(PLANTS), [(c, f) for _n, _l, c, f in STAGES])
+''' % (len(PLANTS), CLOCKLEN)
 
 director = C(scriptCHOP, 'director', 1940, 1120)
 director.par.callbacks = dir_src.path
@@ -397,6 +409,7 @@ crack_code = '''// Cracks radiating from each plant's seed point: a ridged-noise
 uniform vec4 uSeedA;    // xy seed in uv space, z growth radius, w active
 uniform vec4 uSeedB;
 uniform vec4 uSeedC;
+uniform vec4 uSeedD;
 uniform vec4 uParams;   // x time, y crack amount, z bass, w aspect
 uniform vec4 uGrade;    // x vignette, y unused, z unused, w unused
 
@@ -435,12 +448,12 @@ void main() {
     vec4 wall = texture(sTD2DInputs[0], uv);
     vec2 p = vec2(uv.x * uParams.w, uv.y);
 
-    vec4 seeds[3] = vec4[3](uSeedA, uSeedB, uSeedC);
+    vec4 seeds[4] = vec4[4](uSeedA, uSeedB, uSeedC, uSeedD);
     float crack = 0.0;   // thin fracture lines
     float rim = 0.0;     // dust glowing on the breaking edge
     float hole = 0.0;    // bricks actually gone
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         vec4 sd = seeds[i];
         if (sd.w < 0.01 || sd.z < 0.0005) continue;
         vec2 sp = vec2(sd.x * uParams.w, sd.y);
@@ -493,9 +506,9 @@ crack_src.par.pixeldat = crack_dat.path
 
 # Uniforms via the Vectors page — the Constants page is broken on this build
 # (MACHINE.md), and packing into vec4s is safe everywhere.
-crack_src.par.vec = 5
+crack_src.par.vec = 6
 for i, (px, py, _h, seed) in enumerate(PLANTS):
-    nm = ['uSeedA', 'uSeedB', 'uSeedC'][i]
+    nm = ['uSeedA', 'uSeedB', 'uSeedC', 'uSeedD'][i]
     setattr(crack_src.par, 'vec%dname' % i, nm)
     # world -> uv
     getattr(crack_src.par, 'vec%dvaluex' % i).val = 0.5 + px / ORTHOW
@@ -505,14 +518,14 @@ for i, (px, py, _h, seed) in enumerate(PLANTS):
     getattr(crack_src.par, 'vec%dvaluew' % i).expr = (
         "1.0 if %s > 0.001 else 0.0" % D('crack%d' % i))
 
-crack_src.par.vec3name = 'uParams'
-crack_src.par.vec3valuex.expr = D('ctime')
-crack_src.par.vec3valuey.expr = "parent().par.Crackamt"
-crack_src.par.vec3valuez.expr = D('bass')
-crack_src.par.vec3valuew.val = ASPECT
+crack_src.par.vec4name = 'uParams'
+crack_src.par.vec4valuex.expr = D('ctime')
+crack_src.par.vec4valuey.expr = "parent().par.Crackamt"
+crack_src.par.vec4valuez.expr = D('bass')
+crack_src.par.vec4valuew.val = ASPECT
 
-crack_src.par.vec4name = 'uGrade'
-crack_src.par.vec4valuex.expr = "parent().par.Vignette"
+crack_src.par.vec5name = 'uGrade'
+crack_src.par.vec5valuex.expr = "parent().par.Vignette"
 
 # ---------------------------------------------------------------------------
 # PLANTS — one L-System per plant, generations animated 0 -> GENMAX
@@ -572,6 +585,23 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     span = max(1e-6, max(ys_) - min(ys_))
     scl = height / span
 
+    # A finished plant must stop re-cooking: its `generations` expression reads the
+    # director, which cooks every frame, so the SOP is dirtied every frame even when
+    # the value has not moved. A Switch SOP only cooks its selected input, so once
+    # the plant is grown the animated L-System is not evaluated at all. With four
+    # plants that is the difference between ~4ms and ~1ms of L-System per frame.
+    lsg = C(lsystemSOP, 'plant%d_grown' % i, 170, y - 160, type='tube',
+            angleinit=19.0, stepinit=0.1, stepscale=0.88, gravity=0.05,
+            randscale=0.24, randseed=seed, contangl=True, contlength=True,
+            contwidth=True, thickinit=0.06, thickscale=0.80,
+            rows=3, cols=5, smooth=0.35, generations=GENMAX)
+    lsg.par.rules = rules.path
+
+    swi = C(switchSOP, 'plant%d_switch' % i, 340, y - 80)
+    W(ls, swi, 0)
+    W(lsg, swi, 1)
+    swi.par.input.expr = "1 if %s >= 0.999 else 0" % D('grow%d' % i)
+
     geo = C(geometryCOMP, 'plant%d_geo' % i, 340, y, tx=px, ty=py, tz=0.0)
     geo.par.sx = geo.par.sy = geo.par.sz = scl
     geo.par.material = stem_mat.path
@@ -584,7 +614,7 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     sel = geo.create(inSOP, 'in_stem') if False else None
     # Pull the L-System in with a Select SOP so the geometry lives outside the COMP.
     sel = geo.create(selectSOP, 'stem')
-    sel.par.sop = ls.path
+    sel.par.sop = swi.path
     sel.render = True
     sel.display = True
     sel.nodeX, sel.nodeY = 0, 0
@@ -975,7 +1005,8 @@ soft(cam, orthowidth=ORTHOW, near=0.1, far=20.0)
 render = C(renderTOP, 'render_garden', 1780, -60)
 res(render)
 render.par.camera = cam.path
-render.par.geometry = 'plant0_geo plant1_geo plant2_geo flowers bees'
+render.par.geometry = ' '.join('plant%d_geo' % i for i in range(len(PLANTS))) \
+    + ' flowers bees'
 render.par.lights = 'light_sun light_fill'
 render.par.bgcolora = 0.0
 soft(render, antialias='msaa4x', transparency=True)
@@ -1019,49 +1050,71 @@ s.outputConnectors[0].connect(pout.inputConnectors[0])
 # ---------------------------------------------------------------------------
 # Restart pulse -> re-cue the cycle timer.
 # ---------------------------------------------------------------------------
-pexec = C(parameterexecuteDAT, 'stage_exec', 1940, 1000)
-pexec.text = '''# Every Go<stage> pulse just writes the Stage menu; the director reads it from
-# there, so keys, pulses and hand-setting the menu all go through one path.
-STAGE_NAMES = %r
+pexec = C(parameterexecuteDAT, 'checkpoint_exec', 1940, 1000)
+pexec.text = '''# Checkpoints are SEEKS, not freeze-frames. showtime = monotonic clock - Timeoffset,
+# so jumping to time T is just Timeoffset = clock_now - T; nothing pauses, and the
+# story carries on playing from wherever it lands.
+CHECKPOINTS = %r
+
+
+def _seek(comp, seconds):
+    d = comp.op('director')
+    raw = float(d['rawtime'][0]) if d is not None and d.numChans else 0.0
+    # Land a hair PAST the target. Timeoffset is a 32-bit float par, so seeking to
+    # exactly 0 rounds to a tiny negative, and (tiny negative %% storylen) wraps to
+    # the very end of the story - the bare wall would come back as the full garden.
+    comp.par.Timeoffset = raw - seconds - 0.02
+
+
+def _current_index(comp):
+    scenelen = max(1.0, float(comp.par.Scenelen.eval()))
+    d = comp.op('director')
+    show = float(d['show'][0]) if d is not None and d.numChans else 0.0
+    here = show / scenelen
+    idx = 0
+    for i, (_n, _l, mult) in enumerate(CHECKPOINTS):
+        if mult <= here + 1e-4:
+            idx = i
+    return idx
 
 
 def onPulse(par):
     comp = par.owner
     n = par.name
+    scenelen = max(1.0, float(comp.par.Scenelen.eval()))
+    names = [c[0] for c in CHECKPOINTS]
+
     if n == 'Restart':
-        t = comp.op('cycle_timer')
-        if t:
-            # start alone resumes the timer but leaves the cycle counter where it
-            # was, so the garden would come back already full. initialize zeroes it.
-            t.par.initialize.pulse()
-            t.par.start.pulse()
-        comp.par.Stage = 'auto'
-    elif n == 'Goauto':
-        comp.par.Stage = 'auto'
-    elif n == 'Nextstage':
-        cur = int(comp.par.Stage.menuIndex)
-        comp.par.Stage.menuIndex = (cur + 1) %% (len(STAGE_NAMES) + 1)
+        _seek(comp, 0.0)
+    elif n == 'Nextcp':
+        _seek(comp, CHECKPOINTS[(_current_index(comp) + 1) %% len(CHECKPOINTS)][2]
+              * scenelen)
+    elif n == 'Prevcp':
+        _seek(comp, CHECKPOINTS[(_current_index(comp) - 1) %% len(CHECKPOINTS)][2]
+              * scenelen)
     elif n.startswith('Go'):
         want = n[2:].lower()
-        if want in STAGE_NAMES:
-            comp.par.Stage = want
+        if want in names:
+            _seek(comp, CHECKPOINTS[names.index(want)][2] * scenelen)
     return
-''' % [st[0] for st in STAGES]
+''' % (CHECKPOINTS,)
 pexec.par.op = s.path
-soft(pexec, pars='Restart Goauto Nextstage ' + ' '.join('Go' + st[0] for st in STAGES),
+soft(pexec, pars='Restart Nextcp Prevcp ' + ' '.join('Go' + cp[0]
+                                                     for cp in CHECKPOINTS),
      valuechange=False, onpulse=True)
 
-# --- keyboard: 1-6 select a stage, 0 returns to the auto cycle ---------------
-keyin = C(keyboardinDAT, 'key_stage', 1780, 880)
-keyin.par.keys = '0 1 2 3 4 5 6'
-# TD auto-docks a <name>_callbacks Text DAT when the op is created; reuse it if so.
+# --- keyboard: 1-9 seek to a checkpoint, 0 restarts the story ----------------
+keyin = C(keyboardinDAT, 'key_checkpoint', 1780, 880)
+keyin.par.keys = ' '.join(str(d) for d in range(10))
+# TD auto-docks a <name>_callbacks Text DAT when the op is created; reuse it.
 kcb = keyin.par.callbacks.eval()
 if kcb is None:
-    kcb = C(textDAT, 'key_stage_callbacks', 1780, 800)
+    kcb = C(textDAT, 'key_checkpoint_callbacks', 1780, 800)
     keyin.par.callbacks = kcb.path
 kcb.nodeX, kcb.nodeY = 1780, 800
-kcb.text = '''# 1-6 jump to a stage, 0 hands the scene back to the auto cycle.
-STAGE_NAMES = %r
+kcb.text = '''# 1-9 seek to a checkpoint and let the story keep playing; 0 restarts from a bare
+# wall. These are chapter marks in one continuous four-minute arc, not stages.
+CHECKPOINTS = %r
 
 
 def onKey(dat, keyInfo):
@@ -1070,26 +1123,37 @@ def onKey(dat, keyInfo):
     comp = dat.parent()
     k = keyInfo.key
     if k == '0':
-        comp.par.Stage = 'auto'
-    elif k in '123456':
+        comp.par.Restart.pulse()
+    elif k in '123456789':
         i = int(k) - 1
-        if i < len(STAGE_NAMES):
-            comp.par.Stage = STAGE_NAMES[i]
+        if i < len(CHECKPOINTS):
+            getattr(comp.par, 'Go' + CHECKPOINTS[i][0]).pulse()
     return
 
 
 def onShortcut(dat, shortcutName, time):
     return
-''' % [st[0] for st in STAGES]
+''' % (CHECKPOINTS,)
 
 s.par.display = True
 s.par.opviewer = final_out.path
 
 timer.par.initialize.pulse()
 timer.par.start.pulse()
+# Start the story at the bare wall rather than wherever TD's uptime happens to sit.
+director.cook(force=True)
+try:
+    # minus the same epsilon as _seek, for the same float32 wrap reason
+    s.par.Timeoffset = float(director['rawtime'][0]) - 0.02
+except Exception:
+    s.par.Timeoffset = 0.0
 
 print('built %s' % s.path)
 print('  wall photo: %s' % (wall_path or 'NOT FOUND'))
-print('  timer chans: %s' % [c.name for c in timer.chans()])
+print('  plants: %d   scene length: %.0fs   full story: %.0fs'
+      % (len(PLANTS), s.par.Scenelen.eval(),
+         s.par.Scenelen.eval() * (len(PLANTS) + 0.3)))
+print('  checkpoints: %s' % ', '.join('%d=%s' % (i + 1, cp[0])
+                                      for i, cp in enumerate(CHECKPOINTS)))
 print('  director chans: %s' % [c.name for c in director.chans()])
 print('  flower sites: %d' % sites.numSamples)

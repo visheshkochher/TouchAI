@@ -264,8 +264,25 @@ Cost scales brutally with generations — measure before committing. Rule
 | 6 | 23k | ~1.1 ms |
 | 7 (rule D, 4-way) | 39k | 209 ms |
 
-A plant whose `generations` stops changing stops re-cooking, so only the plant
-currently growing costs anything.
+### Parking a finished generator (Switch SOP)
+
+A plant whose `generations` has reached its final value does **not** stop re-cooking on
+its own. If that parameter holds an expression referencing a CHOP that cooks every
+frame — a director, an audio null — TD dirties the SOP every frame even though the
+value never moves. With four animated L-Systems that was ~4ms per frame of pure waste.
+
+**A Switch SOP only cooks its selected input.** Feed it the animated generator on input
+0 and a static, fully-grown copy on input 1, and flip it when the growth envelope
+finishes:
+
+```python
+swi.par.input.expr = "1 if op('director')['grow0'] >= 0.999 else 0"
+```
+
+The animated L-System is then not evaluated at all. Verify it by watching `cookFrame`
+on the parked op — it should stay frozen while the timeline runs on. (The parameter is
+`input`, not `index`.) The same trick parks any expensive generator behind a condition:
+particle sims, heavy SOP chains, procedural geometry that has settled.
 
 ### Shape gotchas
 
