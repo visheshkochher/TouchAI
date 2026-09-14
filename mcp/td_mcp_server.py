@@ -414,12 +414,36 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _get_root():
-    """Discover the project root: parent of the Web Server DAT running this script."""
+def _get_bridge_comp():
+    """The COMP this bridge is packaged in (td_mcp_server.tox) — holds only the
+    Web Server DAT and this handler."""
     try:
         return me.parent()
     except Exception:
         return None
+
+
+def _is_bridge_op(o, bridge_path):
+    """True if o is the bridge COMP itself or anything inside it."""
+    if not bridge_path:
+        return False
+    return o.path == bridge_path or o.path.startswith(bridge_path + '/')
+
+
+def _get_root():
+    """The project network the bridge was dropped into.
+
+    The bridge ships as a .tox, so me.parent() is the bridge's own container — one
+    level below the network the user actually builds in. Sweeping from there makes
+    health/observe/error-scans see only the server's own two operators.
+    """
+    bridge = _get_bridge_comp()
+    if bridge is None:
+        return None
+    try:
+        return bridge.parent() or bridge
+    except Exception:
+        return bridge
 
 
 def _find_output_top():
@@ -713,8 +737,20 @@ def _find_ffmpeg():
     return None
 
 
-# Wall-clock/frame checkpoints for real-fps measurement across health calls
-_health_last = {"t": None, "f": None}
+def _health_checkpoint(now, frame_now):
+    """Swap in a new wall-clock/frame checkpoint, returning the previous one.
+
+    Kept in operator storage rather than a module global: the sweep touches
+    operators, any re-cook of this handler DAT re-executes the module, and a
+    module-level checkpoint would be reset to None before the next call could ever
+    read it — so real fps could never be measured.
+    """
+    holder = _get_bridge_comp()
+    if holder is None:
+        return None
+    prev = holder.fetch('_mcp_health_last', None)
+    holder.store('_mcp_health_last', {"t": now, "f": frame_now})
+    return prev
 
 
 def handle_health(args):
@@ -736,15 +772,24 @@ def handle_health(args):
     now = _time.time()
     frame_now = absTime.frame
     fps = None
-    if _health_last["t"] is not None:
-        dt = now - _health_last["t"]
-        if dt > 0.2:
-            fps = (frame_now - _health_last["f"]) / dt
-    _health_last["t"] = now
-    _health_last["f"] = frame_now
+    prev = _health_checkpoint(now, frame_now)
+    if prev and prev.get("t") is not None:
+        dt = now - prev["t"]
+        # Upper bound rejects a checkpoint restored from a saved file, whose stale
+        # timestamp would otherwise yield a meaningless number.
+        if 0.2 < dt < 60:
+            fps = (frame_now - prev["f"]) / dt
+
+    # The bridge's own ops are excluded: they are not part of the user's scene, the
+    # handler always lands near the top of the hotspot list measuring itself, and
+    # touching it re-cooks it.
+    bridge_path = None
+    bridge = _get_bridge_comp()
+    if bridge is not None:
+        bridge_path = bridge.path
 
     errors, warnings, hotspots = [], [], []
-    children = root.findChildren()
+    children = [c for c in root.findChildren() if not _is_bridge_op(c, bridge_path)]
     for c in children:
         try:
             e = c.errors()
@@ -779,6 +824,9 @@ def handle_health(args):
         result["errors_truncated"] = len(errors)
     if fps is not None:
         result["real_fps"] = round(fps, 1)
+        if fps < 1 and not me.time.play:
+            result["real_fps_note"] = ("timeline is paused — absTime.frame does not "
+                                       "advance, so this is not a real measurement")
     else:
         result["real_fps"] = ("baseline recorded — wait >=1s in the shell, then call "
                               "health again for a real fps number")
@@ -1141,29 +1189,40 @@ def handle_td_run(args):
 
 
 def _scan_op_errors():
-    """Scan all operators under root for TD-level errors (shader compile failures, etc.)."""
+    """Scan operators under the project root for TD-level problems after a run.
+
+    Collects warnings as well as errors: on 2025.x builds a GLSL compile failure
+    reports through warnings() with errors() left empty, so an errors-only scan
+    misses the most common shader failure entirely.
+    """
     root = _get_root()
     if root is None:
         return []
-    errors = []
+    bridge = _get_bridge_comp()
+    bridge_path = bridge.path if bridge is not None else None
+    found = []
     try:
-        for child in root.findChildren(depth=5):
+        # maxDepth, not depth: findChildren(depth=N) matches operators at *exactly*
+        # depth N, so depth=5 silently returns nothing for a normal-shaped project.
+        for child in root.findChildren(maxDepth=5):
             try:
+                if child == root or _is_bridge_op(child, bridge_path):
+                    continue
                 errs = child.errors()
+                warns = child.warnings()
+                if not errs and not warns:
+                    continue
+                entry = {"op": child.path, "type": child.type}
                 if errs:
-                    # Filter out the MCP server's own container
-                    if child == root or child.path == me.path:
-                        continue
-                    errors.append({
-                        "op": child.path,
-                        "type": child.type,
-                        "errors": errs,
-                    })
+                    entry["errors"] = errs
+                if warns:
+                    entry["warnings"] = warns
+                found.append(entry)
             except Exception:
                 pass
     except Exception:
         pass
-    return errors
+    return found
 
 
 def handle_inspect_op(args):

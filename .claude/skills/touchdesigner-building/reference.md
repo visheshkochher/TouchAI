@@ -84,6 +84,20 @@ top.par.resolutionh = 1080
 - `me.parent()` goes up one level
 - `me.time.seconds` and `me.time.frame` for time values in expressions
 
+### Walking the network — `findChildren`
+- `findChildren()` — every descendant, any depth.
+- `findChildren(maxDepth=N)` — down to N levels. **This is the one you usually want.**
+- `findChildren(depth=N)` — operators at *exactly* depth N. A near-universal trap:
+  `depth=5` on a normal shallow project returns an **empty list**, so a sweep built on
+  it silently reports nothing wrong rather than failing loudly.
+- Filter with `type=`/`name=` (e.g. `findChildren(type=glslTOP)`).
+
+### Errors vs. warnings
+`errors()` and `warnings()` are separate strings, and **which one a failure lands in is
+not intuitive**: on 2025.x builds a GLSL shader that fails to compile populates only
+`warnings()` and leaves `errors()` empty. Any health/verification sweep must check
+both, or it will call a visibly broken scene clean.
+
 ## Commonly Used Operator Types
 
 Type constants are Python globals in TD, not strings. Always verify with `docs(type='list_types', family=...)`.

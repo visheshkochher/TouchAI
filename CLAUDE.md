@@ -28,7 +28,10 @@ TouchDesigner
 2. `health` for a project-wide error/warning sweep (catches ops your change broke that
    you didn't touch); `inspect` for detail on specific operators.
 3. `observe` the output TOP and **look at the image** — and trust the returned `stats`
-   verdict (`black`/`flat`/`transparent`/`static` = dead chain even with no errors).
+   verdict (`black`/`flat`/`transparent` = dead chain even with no errors). The
+   exception is `static`: `observe` advances the timeline, not the wall clock, so
+   `absTime`-driven animation reads as `static` while running fine (see
+   `debugging.md`).
    Judge it against the request (motion, contrast, palette). Adjust and re-observe.
    Never declare a visual done without having seen it.
 4. For audio-reactive work, `render` a few seconds of MP4 with audio to verify sync.

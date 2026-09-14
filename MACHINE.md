@@ -5,66 +5,103 @@ license** — not of TouchDesigner in general. The agent reads it at session sta
 alongside CLAUDE.md and treats its budgets as hard constraints.
 
 **This copy is both a working example and the template.** The values below were
-verified on the original author's machine (a below-spec Intel MacBook — a usefully
-extreme worst case). On *your* machine: keep the section headings, re-verify every
-claim, and rewrite the values — the easiest way is to ask the agent to
-"re-verify MACHINE.md on this machine and rewrite it". If this file is missing,
-assume the defaults noted per section.
+re-verified live against a running TD instance on a second machine (2026-09-14) after
+a fresh clone. They replace the original author's below-spec Intel MacBook profile
+(see `git log` for that version — it is the more constrained worst case, and worth
+reading if you ever move this repo to weaker hardware). On *your* machine: keep the
+section headings, re-verify every claim, and rewrite the values — the easiest way is
+to ask the agent to "re-verify MACHINE.md on this machine and rewrite it". If this
+file is missing, assume the defaults noted per section.
 
-## Hardware / OS (verified 2026-07-12)
+## Hardware / OS (verified 2026-09-14)
 
-- MacBook with **Intel Iris Plus integrated GPU** (deviceID 0x8a53), **1536 MB** GPU
-  memory, Metal 3 via MoltenVK 1.2.7. macOS **26.5.1**.
-- This GPU is **officially below TD's supported spec** (Derivative: Intel GPUs are not
-  supported on macOS; Intel Macs need discrete AMD). It works, but with the budgets
-  below. *Default on other machines: any Apple Silicon or discrete GPU — ignore this
-  section's budgets and use the generic 16.6ms doctrine in the skill.*
+- MacBook Pro (Mac17,2) with **Apple M5** (10-core: 4P+6E), **24 GB** unified memory,
+  Metal 4, native arm64 (TD binary confirmed arm64, no Rosetta). macOS **26.5**
+  (build 25F71).
+- This is **officially supported** spec (Apple Silicon, no discrete-GPU or Rosetta
+  caveats). *Default per the skill: use the generic 16.6ms/60fps doctrine — no
+  below-spec budgets apply here.*
 
-### GPU watchdog budget (the hard constraint)
+### GPU watchdog budget
 
-macOS kills any GPU command buffer that runs ≈2s (`kIOAccelCommandBufferCallbackErrorTimeout`
-→ `VK_ERROR_DEVICE_LOST` → TD's "Vulkan Device has returned a fatal error" dialog and
-exit). **Opening a `.toe` cooks everything at once + compiles all shaders**, so a scene
-that runs fine when built incrementally can be un-openable from disk. Verified budgets
-for scenes that must survive first cook here:
-
-- Per-pixel shader loops: ≤ radius 2 neighborhoods (9–25 iterations), not 3+ (49).
-- blurTOP sizes ≤ ~30 at sim res, always with Pre-Shrink for anything wider.
-- Simulation/feedback resolution ≤ ~640 wide.
-- One heavy GLSL op per scene.
-
-Diagnosis + `.toe` rescue recipe (toeexpand → patch → toecollapse): skill's
-`debugging.md`, "Vulkan fatal error" row.
+Not stress-tested (no heavy feedback/blur scene pushed to failure this session — only
+light verification ops). No Vulkan/Metal fatal-error dialogs occurred. On
+officially-supported Apple Silicon the macOS GPU watchdog is far less likely to be the
+binding constraint than it was on the old Intel Iris Plus machine; treat the old
+machine's per-pixel/blur/feedback-resolution ceilings as **not applicable here** rather
+than carrying them forward. If a scene ever produces a "Vulkan/Metal Device has
+returned a fatal error" dialog on this machine, re-derive real budgets using the
+skill's `debugging.md` recipe and record them here.
 
 ## TouchDesigner build
 
-- **2023.12600** (`/Applications/TouchDesigner.app`).
-- The bridge's `render` tool **crashes on this build** (`leadingzerosdigits` param
-  missing). Use the manual moviefileoutTOP recipe in the skill's `debugging.md`.
-  *Default elsewhere: try `render` first; fall back to the manual recipe.*
-- The GLSL TOP **Constants page is broken on this build** (scalar uniforms silently
-  fail to compile, checkerboard output, empty `.errors()`) — pack scalars into vec4s
-  on the Vectors page. *Unverified on other builds; the Vectors-page habit is safe
-  everywhere.*
-- POPs: not available (needs ≥ 2025.30k). Check `app.build` before reaching for them.
+- **2025.33230** (`/Applications/TouchDesigner.app`), native arm64. Confirmed live via
+  `app.build` and the bridge's `health` tool.
+- POPs: **confirmed available** (`POP`, `boxPOP`, `circlePOP`, etc. all resolve) —
+  unlike the old machine, no need to check `app.build` before reaching for them.
+- `render` tool: **works correctly** on this build — tested end-to-end (glslTOP →
+  MovieFileOut TOP, 30 frames captured cleanly at 30fps). The old build's
+  `leadingzerosdigits` crash does **not** reproduce here.
+  **Gotcha found on this machine**: since ffmpeg isn't installed yet (see Tools
+  below), the final MP4 mux step fails and — because the code's cleanup only runs on
+  the ffmpeg-success path — it **leaves stray `_mcp_movieout`/`_mcp_audioout`
+  operators** in the project needing manual `.destroy()`. Re-test end-to-end once
+  ffmpeg is installed and update this note.
+- **Shader failures report as warnings, not errors, on this build.** A GLSL TOP that
+  fails to compile leaves `errors()` empty and puts *"The GLSL Shader has compile
+  errors (Use Info DAT to see details)"* in `warnings()`. Any verification sweep that
+  only reads `errors()` will call a broken scene clean — this silently defeated the
+  `run` tool's post-execution error detection until it was fixed (see below).
+- GLSL TOP **Constants page is still broken on this build** — confirmed live: a plain
+  `uniform float` wired via `const0name`/`const0value` produces solid black output.
+  Unlike the old machine's report of a *silent* failure, this build does surface a
+  `warnings()` message (`"Uniform 'X' is not assigned. Please assign it on the Colors
+  or Vectors page."`) — but `.errors()` stays empty and the output is still dead, so
+  the practical rule is unchanged: **never use the Constants page for scalar
+  uniforms.** The Vectors-page workaround (`vec0name`/`vec0valuex..w`) was verified
+  working (uniform float via `.x` component, correct pixel value observed).
 
 ## License
 
-- **Non-commercial**: GPU H.264/H.265 *encoding* is blocked (playback fine). Record
-  with `videocodec='mpeg4'` + `audiocodec='mp3'`, or HAP for loops that play back in
-  TD. *Default on licensed machines: H.264 encode works.*
+- **Non-commercial**: confirmed via user — same restriction as the old machine, GPU
+  H.264/H.265 *encoding* is blocked (playback fine). Record with
+  `videocodec='mpeg4'` + `audiocodec='mp3'`, or HAP for loops that play back in TD.
+  Not yet directly re-tested end-to-end (blocked on ffmpeg being installed — see
+  Tools below); re-verify the exact failure mode once ffmpeg is in place.
 
 ## Stability quirks (observed here)
 
-- The bridge/TD main thread can **wedge** (MCP timeouts, TD ~80% CPU, health endpoint
-  dead) after rapid set-params + observe bursts. Only recovery: force-quit TD. Keep
-  scenes rebuildable from scripts.
-- Crash logs land in `~/Library/Logs/DiagnosticReports/TouchDesigner-*.ips`. For GPU
-  crashes, launch TD from a terminal — the `[mvk-error]` lines name the real failure
-  the crash dialog hides.
+- **Never restart the Web Server DAT from inside a request it is serving.** Calling
+  `webserver.par.restart.pulse()` inside a `run` **killed TouchDesigner outright**
+  here (`EXC_BREAKPOINT`/`SIGTRAP`, faulting thread in `libPocoNet` → `operator new`
+  → `libsystem_malloc`): `.pulse()` fires synchronously and tears down the HTTP
+  worker thread that is still executing the handler and building the response.
+  Setting the parameter instead — the `set` tool with `{"restart": true}` — is safe,
+  because a pulse par set to True is applied at the next frame boundary, after the
+  response has been sent. Deploy handler source and restart as **two separate
+  calls**, never one.
+- No main-thread wedge observed this session (light load only — a few `set`/`observe`
+  calls, one `render` attempt). The old machine's "wedge after rapid set-param/observe
+  bursts" is unconfirmed here either way; revisit after a real heavy build session.
+- Claude Code's MCP client connects to the bridge at session start. If TD wasn't up
+  then, the tools stay missing for a while; the raw endpoint is still drivable with
+  `curl` against `http://127.0.0.1:9988/mcp` (plain JSON-RPC) as a workaround, and the
+  client did pick the tools up later in-session here.
+- Crash logs land in `~/Library/Logs/DiagnosticReports/TouchDesigner-*.ips`. Parse the
+  JSON body for `exception` + the faulting thread's frames — that named the POCO
+  networking teardown above precisely. For GPU crashes, launch TD from a terminal to
+  see native error lines the crash dialog hides.
 
 ## Tools present
 
-- `ffmpeg` installed (used by the bridge's GIF observe mode and for verifying
-  recordings with `ffprobe`).
-- `toeexpand` / `toecollapse` at `/Applications/TouchDesigner.app/Contents/MacOS/`.
+- `toeexpand` / `toecollapse` present at
+  `/Applications/TouchDesigner.app/Contents/MacOS/`.
+- `ffmpeg`: **not installed**, and neither is Homebrew (confirmed absent from PATH,
+  `/opt/homebrew`, and `/usr/local`). The bridge's `render` MP4 mux, GIF observe mode,
+  and `ffprobe`-based recording verification all need it — `render` was confirmed to
+  fail cleanly at just the mux step (see TouchDesigner build section above) with
+  everything upstream of it working. Install with:
+  `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && brew install ffmpeg`
+  (run this yourself in a terminal — the Homebrew installer needs an interactive sudo
+  password prompt, which an agent can't supply). Update this line once installed, and
+  re-test `render` + the license codec fallback end-to-end.

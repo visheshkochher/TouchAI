@@ -15,10 +15,29 @@ Source: [johnsabath/touchdesigner-mcp](https://github.com/johnsabath/touchdesign
   no motion.
 
 **After editing `td_mcp_server.py`:** the running TD project executes the copy stored
-in its Web Server DAT, not this file. To deploy changes, paste the new source into the
-server's text DAT inside TD (or use the still-running old bridge's `write` tool on that
-DAT), restart the Web Server DAT, and re-save `td_mcp_server.tox` so the tox stays in
-sync with the repo source.
+in its Web Server DAT, not this file. Deploy in **three separate calls** — never
+combine them, see the warning below:
+
+1. Load the source into the handler DAT. Do it from inside TD so the file never has
+   to round-trip through the agent's context, and decode explicitly — the source
+   contains non-ASCII arrows/quotes, so a bare `open()` dies on TD's ASCII default:
+   ```python
+   with open('<repo>/mcp/td_mcp_server.py', encoding='utf-8') as f:
+       op('/project1/td_mcp_server/mcp_handler').text = f.read()
+   ```
+2. Restart the Web Server DAT with the **`set` tool** (`{"restart": true}`).
+   ⚠️ **Never call `webserver.par.restart.pulse()` from inside a `run`** — `.pulse()`
+   fires synchronously and destroys the HTTP worker thread mid-request, which crashes
+   TouchDesigner (SIGTRAP in `libPocoNet`). Setting the pulse par instead defers it to
+   the next frame, after the response is sent.
+3. Re-save the tox so the checked-in file matches the source:
+   `op('/project1/td_mcp_server').save('<repo>/mcp/td_mcp_server.tox')`
+
+**Step 3 is not optional.** The `.tox` committed at the repo's initial commit was
+stale — it predated the `health` tool and the `observe` pixel-stats extension, so a
+fresh clone got a bridge silently missing both while `td_mcp_server.py` showed them
+present. Verify after deploying: the tool list should have **14** tools including
+`health`, and `observe` responses should carry `stats`.
 
 ## Files
 
