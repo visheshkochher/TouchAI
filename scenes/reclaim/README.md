@@ -253,6 +253,11 @@ project clean.
 
 ## Things worth knowing if you edit this
 
+- Anything that picks a subset of the sites must **span the whole list**. The bee
+  instancer walked it with a fixed stride of 7, which only reaches `7 x nb` entries in
+  — fine at four plants, but at eight it covered index 3..178 of 230 live sites, and
+  since sites are ordered by plant the tally came out `[7,6,7,6,0,0,0,0]`: the last
+  four plants never got a bee. Space picks as `(i + 0.5) * len / n` instead.
 - **A branch tip is a node with exactly one segment touching it** — *not* "the last
   vertex of a prim". Measured on one plant: 82 real tips (degree 1, at heights
   0.71–1.00 of the plant) against 41 prim end-points, of which exactly **one** was a

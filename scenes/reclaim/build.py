@@ -1130,7 +1130,12 @@ def onCook(scriptOp):
         fty[m] = by0 + dx * np.sin(a) + dy * np.cos(a)
 
     idx = np.arange(nb)
-    pick = live[(idx * 7 + 3) %% len(live)]
+    # Spread the bees EVENLY over the whole live-site list. The old fixed stride of 7
+    # only walked `7 * nb` entries into it, and since sites are ordered by plant that
+    # meant the later plants never got a single bee: measured at 8 plants, picks ran
+    # index 3..178 of 230 live sites and the per-plant tally was [7,6,7,6,0,0,0,0].
+    pos = (idx + 0.5) * len(live) / float(max(1, nb))
+    pick = live[np.clip(pos.astype(np.int32), 0, len(live) - 1)]
     ax = ftx[pick]
     ay = fty[pick]
     apid = pid[pick]
