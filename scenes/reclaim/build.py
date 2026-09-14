@@ -32,6 +32,7 @@ ORTHOH = ORTHOW / ASPECT          # world y in [-0.5625, 0.5625]
 GENMAX = 5.0                      # L-System generations at full growth
 MAXSITES = 128                    # hard cap on flower sites (all plants combined)
 MAXBEES = 64
+MAXLEAVES = 60                    # hard cap on leaves (all plants combined)
 
 # Master clock period. The clock timer free-runs and cycles on this, and
 # cycles_plus_fraction * CLOCKLEN is a monotonic seconds counter that the story time
@@ -138,7 +139,8 @@ for nm, label, val, lo, hi in [
     ('Linebright', 'Brick Line Bright', 1.0, 0.0, 3.0),
     ('Crackamt',   'Crack Amount',      1.0, 0.0, 2.0),
     ('Flowersize', 'Flower Size',       1.0, 0.2, 3.0),
-    ('Beecount',   'Bee Count',        32.0, 0.0, float(MAXBEES)),
+    ('Leafsize',   'Leaf Size',         1.0, 0.0, 3.0),
+    ('Beecount',   'Bee Count',        18.0, 0.0, float(MAXBEES)),
     ('Beespeed',   'Bee Speed',         1.0, 0.0, 3.0),
     ('Glow',       'Glow',              0.55, 0.0, 3.0),
     ('Vignette',   'Vignette',          0.9, 0.0, 2.0),
@@ -324,14 +326,26 @@ def onCook(scriptOp):
                 # halves an EMA and drags the whole tempo with it, while the median
                 # simply ignores it.
                 st['intervals'].append(iv)
-                del st['intervals'][:-15]
+                del st['intervals'][:-24]
             st['last_beat'] = now
             st['seen'] = True
             beat = 1.0
 
-    ivs = sorted(st['intervals'])
-    median = ivs[len(ivs) // 2] if ivs else 0.5
-    bpm = 60.0 / max(median, 1e-3)
+    # The DOMINANT CLUSTER, not the median. Spurious onsets do not scatter evenly -
+    # they pile up at their own interval, so the collected set is bimodal and a median
+    # lands in the empty gap between the two humps. Measured on the test track:
+    #   [0.35 0.35 0.367 0.367 0.367 0.383 0.40 0.417 0.483 x6 0.65]
+    # -> median 0.417 = 144bpm (wrong), dominant cluster 0.483 = 124bpm (right).
+    ivs = st['intervals']
+    period = 0.5
+    if ivs:
+        best_n = 0
+        for c in ivs:
+            near = [v for v in ivs if abs(v - c) <= c * 0.09]
+            if len(near) > best_n:
+                best_n = len(near)
+                period = sum(near) / len(near)
+    bpm = 60.0 / max(period, 1e-3)
     bpm = min(200.0, max(50.0, bpm))
 
     # Before the first beat has ever been heard, sit at 1.0 rather than the silence
@@ -386,6 +400,8 @@ dir_src.text = '''# Director: turns one monotonic clock + the audio bands into e
 # scene needs. There is no cycling stage machine here - the whole show is a single
 # playhead, `show`, measured in seconds since the wall was bare. Each plant owns a
 # `scenelen`-long window of it and simply holds its finished state afterwards.
+import math
+
 NPLANTS = %d
 CLOCKLEN = %.4f
 TAIL = 0.30        # extra scene-lengths of held full garden at the end
@@ -470,6 +486,12 @@ def onCook(scriptOp):
             bee = env(p, 0.68, 0.95)
         else:
             crack = grow = bloom = bee = 1.0
+        # The plant COMP rotates by this, and the flower and bee instancers rotate
+        # their anchors by the same angle about the same base. Publishing it once is
+        # the only way those stay in agreement - flowers used to carry an unrelated
+        # horizontal wiggle of their own and visibly slid off the stems.
+        out['sway%%d' %% i] = (2.6 * math.sin(raw * (0.31 + 0.04 * i) + i * 2.1)
+                              * (0.5 + min(1.0, energy)) * (1.0 if grow > 0.0 else 0.0))
         out['crack%%d' %% i] = crack
         out['grow%%d' %% i] = grow
         out['bloom%%d' %% i] = bloom
@@ -643,7 +665,7 @@ void main() {
     // fracture edge. Weighted the other way it reads as lava rather than a broken wall.
     vec3 col = wall.rgb * (1.0 - 0.88 * crack);
     col = mix(col, vec3(0.010, 0.008, 0.010), max(crack * 0.78, hole * 0.94));
-    col += vec3(1.00, 0.50, 0.18) * crack * (0.16 + 0.40 * uParams.z);
+    col += vec3(1.00, 0.50, 0.18) * crack * (0.11 + 0.30 * uParams.z);
     col += vec3(1.00, 0.74, 0.40) * rim * (0.34 + 0.65 * uParams.z);
 
     vec2 q = uv - 0.5;
@@ -666,7 +688,7 @@ for i, (px, py, _h, seed) in enumerate(PLANTS):
     getattr(crack_src.par, 'vec%dvaluex' % i).val = 0.5 + px / ORTHOW
     getattr(crack_src.par, 'vec%dvaluey' % i).val = 0.5 + py / ORTHOH
     getattr(crack_src.par, 'vec%dvaluez' % i).expr = (
-        "0.02 + 0.22 * %s" % D('crack%d' % i))
+        "0.02 + 0.19 * %s" % D('crack%d' % i))
     getattr(crack_src.par, 'vec%dvaluew' % i).expr = (
         "1.0 if %s > 0.001 else 0.0" % D('crack%d' % i))
 
@@ -691,7 +713,11 @@ rules = C(textDAT, 'plant_rules', 0, 100)
 #   A=FF[+A][-A]                        0.52
 #   A=F[++A][--A]A     (this one)       0.84  - stems fan up and bloom in a crown
 # The FFFF premise is the bare stem rising out of the crack before it fans.
-rules.text = "premise:FFFFA\nA=F[++A][--A]~(9)A\n"
+# The /(137) roll is the golden angle, the same divergence real phyllotaxis uses.
+# Without it every branch stays in one plane and the crown is a flat cut-out:
+# measured depth (z extent / height) 0.11 flat vs 0.54 with the roll, and it bunches
+# the tips slightly better too (topfrac 0.84 -> 0.86).
+rules.text = "premise:FFFFA\nA=/(137)F[++A][--A]~(9)A\n"
 
 # Tubes, not a wireframe skeleton: flat constant-width lines read as a wire mesh no
 # matter what colour they are, while lit tapered tubes read as stems. 12k points at
@@ -719,7 +745,7 @@ plant_scales = []
 for i, (px, py, height, seed) in enumerate(PLANTS):
     y = 100 - i * 170
     ls = C(lsystemSOP, 'plant%d_lsys' % i, 170, y, type='tube',
-           angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+           angleinit=16.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
            randscale=0.30, randseed=seed, contangl=True, contlength=True,
            # 81 long stems converge at the crown, so they merge into a solid canopy
            # far sooner than 729 lacy branchlets did: measured silhouette coverage
@@ -732,7 +758,7 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     # A second, static copy at full growth: flower sites are read off this, so they
     # stay put while the animated one grows. Constant params -> cooks once.
     lsf = C(lsystemSOP, 'plant%d_full' % i, 170, y - 80, type='skel',
-            angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+            angleinit=16.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
             randscale=0.30, randseed=seed, contangl=True, contlength=True,
             generations=GENMAX)
     lsf.par.rules = rules.path
@@ -747,7 +773,7 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     # the plant is grown the animated L-System is not evaluated at all. With four
     # plants that is the difference between ~4ms and ~1ms of L-System per frame.
     lsg = C(lsystemSOP, 'plant%d_grown' % i, 170, y - 160, type='tube',
-            angleinit=14.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
+            angleinit=16.0, stepinit=0.1, stepscale=0.99, anglescale=0.84,
             randscale=0.30, randseed=seed, contangl=True, contlength=True,
             contwidth=True, thickinit=0.075, thickscale=0.88,
             rows=3, cols=6, smooth=0.4, generations=GENMAX)
@@ -767,9 +793,8 @@ for i, (px, py, height, seed) in enumerate(PLANTS):
     for axis in ('sx', 'sy', 'sz'):
         getattr(geo.par, axis).expr = "%.6f * %s" % (scl, emerge)
     geo.par.material = stem_mat.path
-    # A slow sway that leans with the music.
-    geo.par.rz.expr = ("2.6 * math.sin(%s * (0.31 + %0.3f) + %0.2f) * (0.5 + %s)"
-                       % (D('ctime'), 0.04 * i, i * 2.1, D('energy')))
+    # A slow sway that leans with the music, shared with the flowers and bees.
+    geo.par.rz.expr = D('sway%d' % i)
     ins = geo.op('torus1')
     if ins:
         ins.destroy()
@@ -846,10 +871,11 @@ sites.par.callbacks = sites_src.path
 # FLOWER INSTANCES — bloom timing, per-flower colour, audio breathing
 # ---------------------------------------------------------------------------
 finst_src = C(textDAT, 'flower_inst_src', 820, 40)
-finst_src.text = '''# Per-flower transform + colour. ~90 samples of numpy per frame.
+finst_src.text = '''# Per-flower transform + colour. ~128 samples of numpy per frame.
 import numpy as np
 
 NPLANTS = %d
+BASES = %r
 
 
 def onCook(scriptOp):
@@ -887,12 +913,26 @@ def onCook(scriptOp):
 
     bloom = np.zeros(n, dtype=np.float32)
     dens = np.zeros(n, dtype=np.float32)
+    swaydeg = np.zeros(n, dtype=np.float32)
+    basex = np.zeros(n, dtype=np.float32)
+    basey = np.zeros(n, dtype=np.float32)
     for i in range(NPLANTS):
         m = (pid == i)
         if not m.any():
             continue
         bloom[m] = dc('bloom%%d' %% i)
         dens[m] = dc('dens%%d' %% i)
+        swaydeg[m] = dc('sway%%d' %% i)
+        basex[m] = BASES[i][0]
+        basey[m] = BASES[i][1]
+
+    # Rotate each flower about its own plant's base by exactly the angle the plant
+    # COMP is rotating by, so blossom stays welded to the stem tip it grew on.
+    ang = np.radians(swaydeg)
+    ca, sa = np.cos(ang), np.sin(ang)
+    dx, dy = tx - basex, ty - basey
+    tx = basex + dx * ca - dy * sa
+    ty = basey + dx * sa + dy * ca
 
     # Each flower opens at its own moment inside the bloom window, and only the
     # fraction of sites allowed by this plant's density ever opens at all.
@@ -901,13 +941,29 @@ def onCook(scriptOp):
     local = local * local * (3.0 - 2.0 * local)
     allowed = (rnd < dens).astype(np.float32)
 
+    # A bud is just an unopened flower: once the stem carrying it has grown, show it
+    # small and green, then let it swell and take on its colour as it opens. Cheaper
+    # and better looking than a separate bud instancer, and it means the crown is
+    # never bare while the plant waits for its bloom window.
+    budded = np.zeros(n, dtype=np.float32)
+    for i in range(NPLANTS):
+        m = (pid == i)
+        if m.any():
+            budded[m] = dc('grow%%d' %% i)
+    budded = np.clip((budded - 0.45) / 0.55, 0.0, 1.0) * allowed
+    openness = np.maximum(local, 0.0)
+
     # overshoot then settle - flowers pop rather than fade in
     pop = 1.0 + 0.35 * np.sin(np.clip(local, 0.0, 1.0) * np.pi) * (1.0 - local)
-    scale = local * allowed * pop * (0.030 + 0.022 * np.mod(rnd * 3.7, 1.0)) * size
+    head = (0.042 + 0.030 * np.mod(rnd * 3.7, 1.0)) * size
+    # a third of full size as a bud, swelling to full as it opens
+    scale = budded * (0.32 + 0.68 * openness) * pop * head
     scale = scale * (1.0 + 0.16 * bass)
 
-    sway = 0.012 * np.sin(t * 0.9 + rnd * 12.0) * local
-    rot = np.mod(rnd * 360.0, 360.0) + 8.0 * np.sin(t * 0.7 + rnd * 5.0)
+    # a small per-flower nod on top of the plant's sway, so they are not rigid
+    nod = 0.004 * np.sin(t * 1.3 + rnd * 12.0) * local
+    rot = (np.mod(rnd * 360.0, 360.0) + swaydeg
+           + 8.0 * np.sin(t * 0.7 + rnd * 5.0))
 
     # Cream / butter / coral / rose - warm hues that sit with the brick rather than
     # fighting it. Only the top of the range goes properly pink.
@@ -916,14 +972,18 @@ def onCook(scriptOp):
     cg = 0.86 - 0.46 * h + 0.08 * energy
     cb = 0.58 - 0.16 * h + 0.12 * np.mod(rnd * 5.1, 1.0)
     lift = (0.80 + 0.20 * min(1.0, energy))
+    # green while closed, its own colour once open
+    cr = cr * openness + 0.34 * (1.0 - openness)
+    cg = cg * openness + 0.52 * (1.0 - openness)
+    cb = cb * openness + 0.24 * (1.0 - openness)
 
     scriptOp.numSamples = n
-    data = [tx + sway, ty, tz + 0.02, scale, scale, scale, rot,
+    data = [tx + nod, ty, tz + 0.02, scale, scale, scale, rot,
             cr * lift, cg * lift, cb * lift]
     for c, v in zip(chans, data):
         c.vals = np.asarray(v, dtype=np.float32).tolist()
     return
-''' % len(PLANTS)
+''' % (len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS])
 
 finst = C(scriptCHOP, 'flower_inst', 980, 40)
 finst.par.callbacks = finst_src.path
@@ -940,6 +1000,7 @@ import numpy as np
 
 NPLANTS = %d
 MAXBEES = %d
+BASES = %r
 
 
 def onCook(scriptOp):
@@ -984,6 +1045,16 @@ def onCook(scriptOp):
 
     ftx = np.array(sites['tx'].vals, dtype=np.float32)
     fty = np.array(sites['ty'].vals, dtype=np.float32)
+    # the flowers are swaying, so the points the bees orbit have to sway with them
+    for i in range(NPLANTS):
+        m = (pid == i)
+        if not m.any():
+            continue
+        a = np.radians(dc('sway%%d' %% i))
+        bx0, by0 = BASES[i]
+        dx, dy = ftx[m] - bx0, fty[m] - by0
+        ftx[m] = bx0 + dx * np.cos(a) - dy * np.sin(a)
+        fty[m] = by0 + dx * np.sin(a) + dy * np.cos(a)
 
     idx = np.arange(nb)
     pick = live[(idx * 7 + 3) %% len(live)]
@@ -1024,7 +1095,7 @@ def onCook(scriptOp):
     bx = entry_x + (ax + ox - entry_x) * arrive
     by = entry_y + (ay + oy - entry_y) * arrive
 
-    sz = arrive * (0.034 + 0.018 * r3)
+    sz = arrive * (0.026 + 0.014 * r3)
     # heading from the ellipse tangent, so the bee tilts into its travel direction
     rz = np.degrees(np.arctan2(np.cos(ang) * 0.62, -np.sin(ang)))
 
@@ -1033,7 +1104,7 @@ def onCook(scriptOp):
     for c, v in zip(chans, data):
         c.vals = np.asarray(v, dtype=np.float32).tolist()
     return
-''' % (len(PLANTS), MAXBEES)
+''' % (len(PLANTS), MAXBEES, [(pl[0], pl[1]) for pl in PLANTS])
 
 binst = C(scriptCHOP, 'bee_inst', 980, -120)
 binst.par.callbacks = binst_src.path
@@ -1092,7 +1163,7 @@ void main() {
     vec2 b = uv * vec2(1.7, 1.15);
     float body = 1.0 - smoothstep(0.78, 1.00, length(b));
     float stripe = smoothstep(0.0, 0.30, sin(uv.x * 11.0));
-    vec3 bodycol = mix(vec3(1.00, 0.76, 0.16), vec3(0.10, 0.07, 0.04), stripe * 0.88);
+    vec3 bodycol = mix(vec3(0.88, 0.64, 0.16), vec3(0.09, 0.06, 0.04), stripe * 0.92);
 
     vec2 w1 = (uv - vec2(-0.18, 0.50)) * vec2(2.4, 3.4);
     vec2 w2 = (uv - vec2(0.26, 0.46)) * vec2(2.8, 3.8);
@@ -1107,14 +1178,17 @@ void main() {
 '''
 bee_tex.par.pixeldat = bee_dat.path
 
-# rectangleSOP's own `texture` toggle does not produce a uv attribute on this build —
-# without a Texture SOP the sprites render untextured and the render TOP warns about it.
-flower_rect = C(rectangleSOP, 'flower_rect', 1240, 40, sizex=1.0, sizey=1.0)
-flower_quad = C(textureSOP, 'flower_quad', 1300, 40, type='rowcol')
-W(flower_rect, flower_quad)
-bee_rect = C(rectangleSOP, 'bee_rect', 1240, -120, sizex=1.0, sizey=0.62)
-bee_quad = C(textureSOP, 'bee_quad', 1300, -120, type='rowcol')
-W(bee_rect, bee_quad)
+# Sprite quads come from a GRID SOP, not rectangleSOP + textureSOP.
+# rectangleSOP's own `texture` toggle produces no uv attribute at all on this build,
+# and a Texture SOP in 'rowcol' mode on a single 4-vertex polygon produces garbage:
+# measured uv = (1.0,0.5) (1.333,0.5) (0.667,0.5) (1.0,0.5) — v pinned at 0.5, u
+# running outside 0..1, so every sprite was drawing one horizontal slice of its
+# texture stretched across the quad. gridSOP at rows=2 cols=2 with texture='rowcol'
+# gives the expected (0,0) (1,0) (0,1) (1,1).
+flower_quad = C(gridSOP, 'flower_quad', 1300, 40, rows=2, cols=2,
+                sizex=1.0, sizey=1.0, texture='rowcol')
+bee_quad = C(gridSOP, 'bee_quad', 1300, -120, rows=2, cols=2,
+             sizex=1.0, sizey=0.62, texture='rowcol')
 
 mat_flower = C(constantMAT, 'mat_flower', 1300, 110)
 mat_flower.par.colormap = flower_tex.path
@@ -1158,6 +1232,242 @@ for p, v in (('instancetx', 'tx'), ('instancety', 'ty'), ('instancetz', 'tz'),
              ('instancerz', 'rz')):
     soft(bees, **{p: v})
 
+
+# ---------------------------------------------------------------------------
+# LEAVES — instanced along the stems, unfurling as growth passes them
+# ---------------------------------------------------------------------------
+leaf_sites_src = C(textDAT, 'leaf_sites_src', 500, -240)
+leaf_sites_src.text = '''# Leaf anchors: interior points along the stems, with the local stem direction so a
+# leaf can sit ON its stem rather than floating near it. Reads the static full-growth
+# skeleton, so this cooks when the plant definition changes and then stops.
+PLANTS = %r
+MAXLEAVES = %d
+
+
+def onCook(scriptOp):
+    pts = []
+    budget = max(1, MAXLEAVES // max(1, len(PLANTS)))
+    for pid, (px, py, scl, seed) in enumerate(PLANTS):
+        sop = op('plant%%d_full' %% pid)
+        if sop is None:
+            continue
+        cand = []
+        for prim in sop.prims:
+            n = len(prim)
+            if n < 3:
+                continue
+            for k in range(0, n - 1):
+                a = prim[k].point.P
+                b = prim[k + 1].point.P
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                # Sample ALONG each segment, not just at its vertices. The bare stem
+                # below the crown is only four long segments, so vertex-only
+                # candidates leave most height bands empty and the leaves all end up
+                # in the flower head again.
+                for u in (0.18, 0.42, 0.66, 0.90):
+                    cand.append((a[0] + dx * u, a[1] + (b[1] - a[1]) * u,
+                                 a[2] + (b[2] - a[2]) * u, dx, dy))
+        if not cand:
+            continue
+        ys = [c[1] for c in cand]
+        lo, hi = min(ys), max(ys)
+        span = max(1e-6, hi - lo)
+
+        # Spread the leaves evenly by HEIGHT, not evenly through the candidate list.
+        # Branching multiplies segments towards the crown, so most candidates live up
+        # there and sampling the list evenly piles every leaf into the flower head,
+        # leaving the stems bare. Bucketing by height band puts leaves up the stem
+        # the way a real plant carries them.
+        top = 0.78
+        chosen = []
+        for b in range(budget):
+            h0 = lo + span * top * (b / float(budget))
+            h1 = lo + span * top * ((b + 1) / float(budget))
+            band = [c for c in cand if h0 <= c[1] < h1]
+            if band:
+                chosen.append((b, band[(b * 7919) %% len(band)]))
+
+        for k, c in chosen:
+            ex, ey, ez, dx, dy = c
+            import math as _m
+            ang = _m.degrees(_m.atan2(dy, dx))
+            r = ((k * 2654435761) %% 10007) / 10007.0
+            side = 1.0 if (k %% 2 == 0) else -1.0
+            pts.append((px + ex * scl, py + ey * scl, ez * scl,
+                        ang + side * (48.0 + 22.0 * r), r, float(pid),
+                        (ey - lo) / span))
+
+    scriptOp.clear()
+    names = ['tx', 'ty', 'tz', 'rz', 'rnd', 'pid', 'hgt']
+    chans = [scriptOp.appendChan(n) for n in names]
+    scriptOp.numSamples = max(1, len(pts))
+    if not pts:
+        for c in chans:
+            c[0] = 0.0
+        return
+    for j, pt in enumerate(pts):
+        for c, v in zip(chans, pt):
+            c[j] = v
+    return
+''' % (
+    [(PLANTS[i][0], PLANTS[i][1], plant_scales[i], PLANTS[i][3])
+     for i in range(len(PLANTS))], MAXLEAVES)
+
+leaf_sites = C(scriptCHOP, 'leaf_sites', 660, -240)
+leaf_sites.par.callbacks = leaf_sites_src.path
+
+leaf_inst_src = C(textDAT, 'leaf_inst_src', 820, -240)
+leaf_inst_src.text = '''# Leaves unfurl as the stem that carries them grows past them, and rotate with the
+# plant's sway exactly like the flowers do.
+import numpy as np
+
+NPLANTS = %d
+BASES = %r
+
+
+def onCook(scriptOp):
+    sites = scriptOp.inputs[0] if len(scriptOp.inputs) > 0 else None
+    d = scriptOp.inputs[1] if len(scriptOp.inputs) > 1 else None
+    par = scriptOp.parent().par
+
+    names = ['tx', 'ty', 'tz', 'sx', 'sy', 'sz', 'rz', 'cr', 'cg', 'cb']
+    scriptOp.clear()
+    chans = [scriptOp.appendChan(n) for n in names]
+
+    if sites is None or d is None or sites.numSamples < 1:
+        scriptOp.numSamples = 1
+        for c in chans:
+            c[0] = 0.0
+        return
+
+    def dc(name, default=0.0):
+        try:
+            return float(d[name][0])
+        except Exception:
+            return default
+
+    n = sites.numSamples
+    tx = np.array(sites['tx'].vals, dtype=np.float32)
+    ty = np.array(sites['ty'].vals, dtype=np.float32)
+    tz = np.array(sites['tz'].vals, dtype=np.float32)
+    rz = np.array(sites['rz'].vals, dtype=np.float32)
+    rnd = np.array(sites['rnd'].vals, dtype=np.float32)
+    hgt = np.array(sites['hgt'].vals, dtype=np.float32)
+    pid = np.array(sites['pid'].vals, dtype=np.float32).astype(np.int32)
+
+    grow = np.zeros(n, dtype=np.float32)
+    swaydeg = np.zeros(n, dtype=np.float32)
+    basex = np.zeros(n, dtype=np.float32)
+    basey = np.zeros(n, dtype=np.float32)
+    for i in range(NPLANTS):
+        m = (pid == i)
+        if not m.any():
+            continue
+        grow[m] = dc('grow%%d' %% i)
+        swaydeg[m] = dc('sway%%d' %% i)
+        basex[m] = BASES[i][0]
+        basey[m] = BASES[i][1]
+
+    t = dc('ctime')
+    energy = dc('energy')
+
+    # A leaf opens only once growth has reached its height on the stem.
+    local = np.clip((grow - hgt * 0.85) / 0.18, 0.0, 1.0)
+    local = local * local * (3.0 - 2.0 * local)
+
+    ang = np.radians(swaydeg)
+    ca, sa = np.cos(ang), np.sin(ang)
+    dx, dy = tx - basex, ty - basey
+    tx = basex + dx * ca - dy * sa
+    ty = basey + dx * sa + dy * ca
+
+    # lower leaves are older, so they are larger; the newest near the crown are small
+    size = ((0.030 + 0.034 * (1.0 - hgt)) + 0.014 * rnd) * local \
+        * float(par.Leafsize.eval())
+    flutter = 7.0 * np.sin(t * 1.1 + rnd * 9.0) * local
+    rot = rz + swaydeg + flutter
+
+    shade = 0.75 + 0.45 * rnd
+    lift = 0.85 + 0.20 * min(1.0, energy)
+    cr = 0.26 * shade * lift
+    cg = 0.46 * shade * lift
+    cb = 0.20 * shade * lift
+
+    scriptOp.numSamples = n
+    data = [tx, ty, tz - 0.01, size, size, size, rot, cr, cg, cb]
+    for c, v in zip(chans, data):
+        c.vals = np.asarray(v, dtype=np.float32).tolist()
+    return
+''' % (
+    len(PLANTS), [(pl[0], pl[1]) for pl in PLANTS])
+
+leaf_inst = C(scriptCHOP, 'leaf_inst', 980, -240)
+leaf_inst.par.callbacks = leaf_inst_src.path
+W(leaf_sites, leaf_inst, 0)
+W(director, leaf_inst, 1)
+
+leaf_tex = C(glslTOP, 'leaf_tex', 1140, -240)
+res(leaf_tex, 128, 128)
+leaf_dat = C(textDAT, 'leaf_tex_pixel', 1140, -310)
+leaf_dat.text = '''// A pointed leaf, attached at u=0 and tapering to a tip at u=1. The quad is offset so
+// u=0 sits on the stem, which means the leaf pivots at its base like a real one
+// instead of spinning about its middle.
+out vec4 fragColor;
+
+void main() {
+    float t = clamp(vUV.s, 0.0, 1.0);             // 0 at the stem, 1 at the tip
+    float y = vUV.t * 2.0 - 1.0;                  // -1..1 across the blade
+
+    // broad a third of the way along, drawn to a point at the tip
+    float w = 0.46 * pow(max(sin(3.14159265 * pow(t, 0.80)), 0.0), 1.15);
+    float d = abs(y) - w;
+    float m = 1.0 - smoothstep(-0.02, 0.02, d);
+
+    float across = abs(y) / max(w, 1e-3);         // 0 on the midrib, 1 at the edge
+    float rib = 1.0 - smoothstep(0.0, 0.12, abs(y));
+    // chevron veins running out from the midrib toward the tip
+    float veins = 0.5 + 0.5 * sin((t * 9.0 - abs(y) * 5.0) * 3.14159265);
+
+    vec3 deep = vec3(0.15, 0.30, 0.12);
+    vec3 pale = vec3(0.42, 0.66, 0.28);
+    vec3 col = mix(pale, deep, smoothstep(0.15, 1.0, across));
+    col *= 0.93 + 0.07 * veins;
+    col = mix(col, pale * 1.15, rib * 0.40);
+    col *= 0.85 + 0.25 * (1.0 - t);               // slightly darker toward the tip
+
+    fragColor = TDOutputSwizzle(vec4(col * m, m));
+}
+'''
+leaf_tex.par.pixeldat = leaf_dat.path
+
+# tx = 0.5 puts the quad's near edge on the origin, so an instanced leaf hangs off
+# its stem point rather than being centred on it. UVs come from the grid's rows and
+# columns, so shifting the geometry does not disturb them.
+leaf_quad = C(gridSOP, 'leaf_quad', 1300, -240, rows=2, cols=2,
+              sizex=1.0, sizey=0.52, tx=0.5, texture='rowcol')
+
+mat_leaf = C(constantMAT, 'mat_leaf', 1300, -180)
+mat_leaf.par.colormap = leaf_tex.path
+soft(mat_leaf, alpha=1.0, blending=True, depthtest=False)
+
+leaves = C(geometryCOMP, 'leaves', 1460, -240)
+lq = leaves.op('torus1')
+if lq:
+    lq.destroy()
+lsel = leaves.create(selectSOP, 'quad')
+lsel.par.sop = leaf_quad.path
+lsel.render = True
+lsel.display = True
+leaves.par.material = mat_leaf.path
+leaves.par.instancing = True
+leaves.par.instanceop = leaf_inst.path
+for _p, _v in (('instancetx', 'tx'), ('instancety', 'ty'), ('instancetz', 'tz'),
+               ('instancesx', 'sx'), ('instancesy', 'sy'), ('instancesz', 'sz'),
+               ('instancerz', 'rz')):
+    soft(leaves, **{_p: _v})
+soft(leaves, instancecolormode='multiply', instancer='cr',
+     instanceg='cg', instanceb='cb')
+
 # ---------------------------------------------------------------------------
 # RENDER + COMPOSITE
 # ---------------------------------------------------------------------------
@@ -1168,7 +1478,7 @@ render = C(renderTOP, 'render_garden', 1780, -60)
 res(render)
 render.par.camera = cam.path
 render.par.geometry = ' '.join('plant%d_geo' % i for i in range(len(PLANTS))) \
-    + ' flowers bees'
+    + ' leaves flowers bees'
 render.par.lights = 'light_sun light_fill'
 render.par.bgcolora = 0.0
 soft(render, antialias='msaa4x', transparency=True)
@@ -1333,4 +1643,5 @@ print('  plants: %d   scene length: %.0fs   full story: %.0fs'
 print('  checkpoints: %s' % ', '.join('%d=%s' % (i + 1, cp[0])
                                       for i, cp in enumerate(CHECKPOINTS)))
 print('  director chans: %s' % [c.name for c in director.chans()])
-print('  flower sites: %d' % sites.numSamples)
+print('  flower sites: %d   leaf sites: %d' % (sites.numSamples,
+                                                 leaf_sites.numSamples))

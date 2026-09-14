@@ -344,10 +344,18 @@ hook — the bridge for OpenCV / numpy work inside the cook chain:
   `replace | multiply | add | subtract`, and it defaults to **`replace`**, which throws
   the texture away and paints flat quads. Use `multiply` to tint a sprite texture, and
   keep the texture near-neutral so the instance colour actually sets the hue.
-- **rectangleSOP's `texture` toggle does not create a `uv` attribute** on this build.
-  Without UVs the sprite renders untextured and the render TOP warns
-  *"A MAT is using texture coordinates, but the POP/SOP ... does not have texture
-  attributes."* Add a `textureSOP` with `type='rowcol'` after the rectangle.
+- **Build sprite quads with a `gridSOP`** (`rows=2, cols=2, texture='rowcol'`), which
+  gives the expected uv `(0,0) (1,0) (0,1) (1,1)`. Two things that do *not* work:
+  `rectangleSOP`'s own `texture` toggle creates no uv attribute at all, and a
+  `textureSOP` in `rowcol` mode on a single four-vertex polygon produces garbage —
+  measured uv `(1.0,0.5) (1.333,0.5) (0.667,0.5) (1.0,0.5)`, i.e. `v` pinned at 0.5 and
+  `u` running outside 0..1. That second failure is nasty because it renders *something*:
+  every sprite draws one horizontal slice of its texture stretched across the quad,
+  which still reads as a plausible soft blob and can survive several review passes.
+  Verify UVs directly rather than by eye: `[(v.uv[0], v.uv[1]) for v in sop.prims[0]]`.
+- Script SOP: `scriptOp.vertexAttribs.create('uv', ...)` **aborts the callback** on
+  2025.33230 — no exception, no error on the op, geometry simply stops being built at
+  that line. Prefer a SOP that generates the attribute natively.
 - **constantMAT blends premultiplied by default** (`srcblend='one'`,
   `destblend='omsa'`). A sprite shader emitting straight alpha — `vec4(col, a)` —
   paints an opaque rectangle wherever alpha is 0. Emit `vec4(col * a, a)`.

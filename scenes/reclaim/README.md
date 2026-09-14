@@ -105,6 +105,7 @@ On the `reclaim` COMP, page **Reclaim**:
 | `Linebright` | brightness of the traced mortar grid |
 | `Crackamt` | crack strength |
 | `Flowersize` | flower head size |
+| `Leafsize` | leaf size (0 removes the foliage entirely) |
 | `Beecount` / `Beespeed` | how many bees, and the shared orbital rate |
 | `Glow` | bloom pass strength |
 | `Vignette` | corner falloff |
@@ -162,6 +163,31 @@ Three things were making the swarm read as jitter, and all three are fixed:
   against the orbit. It now sits on exact **2×** and **0.5×** harmonics, so it repeats
   with the orbit and reads as a hover.
 
+## Plant detail
+
+Each plant is four instanced layers over one L-System, not just stems:
+
+- **Stems** — lit tapered tubes. The rule carries a `/(137)` roll, the golden angle
+  real phyllotaxis uses; without it every branch stays in one plane and the crown is a
+  flat cut-out (measured depth, z extent over height: **0.11 flat vs 0.54** with the
+  roll, and it bunches the tips slightly better too).
+- **Leaves** — pointed blades instanced up the stems, unfurling as growth passes their
+  height, older ones lower down and larger. They are distributed by **height band**
+  rather than evenly through the candidate list: branching multiplies segments toward
+  the crown, so sampling the list evenly piles every leaf into the flower head and
+  leaves the stems bare. Candidates are also sampled *along* each segment, because the
+  bare lower stem is only four long segments and vertex-only sampling leaves the low
+  bands empty.
+- **Buds** — a bud is just an unopened flower: once the stem carrying it has grown it
+  shows small and green, then swells and takes on its colour as it opens. Cheaper than
+  a separate instancer, and it means the crown is never bare while the plant waits for
+  its bloom window.
+- **Flowers** — five-petal blooms with a warm centre.
+
+Everything rotates about its own plant's base by the **same** `sway` angle, published
+once by the director. Flowers used to carry an unrelated horizontal wiggle of their own
+and visibly slid off the stems as the plant leaned.
+
 ## Structure
 
 ```
@@ -206,6 +232,15 @@ project clean.
 
 ## Things worth knowing if you edit this
 
+- **Sprite quads must come from a `gridSOP`** (`rows=2, cols=2, texture='rowcol'`).
+  `rectangleSOP`'s own `texture` toggle produces no uv attribute at all on this build,
+  and a `textureSOP` in `rowcol` mode on a single four-vertex polygon produces garbage:
+  measured uv `(1.0,0.5) (1.333,0.5) (0.667,0.5) (1.0,0.5)` — `v` pinned at 0.5 and `u`
+  running outside 0..1, so every sprite drew one horizontal *slice* of its texture
+  stretched across the quad. It is easy to miss because the result still looks like a
+  soft coloured blob. gridSOP gives the expected `(0,0) (1,0) (0,1) (1,1)`.
+- A Script SOP's `scriptOp.vertexAttribs.create(...)` **aborts the callback** on this
+  build — no exception, no error, the geometry just stops being built at that line.
 - The **Rules DAT wants no space after the delimiter**. `premise:FX` and `X=F-...`
   work; `premise: FX` silently produces zero geometry and no error.
 - The textbook `F=FF` bush grows a long bare stick before it branches at all (measured:
