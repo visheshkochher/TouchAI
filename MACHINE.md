@@ -80,9 +80,21 @@ skill's `debugging.md` recipe and record them here.
   because a pulse par set to True is applied at the next frame boundary, after the
   response has been sent. Deploy handler source and restart as **two separate
   calls**, never one.
-- No main-thread wedge observed this session (light load only — a few `set`/`observe`
-  calls, one `render` attempt). The old machine's "wedge after rapid set-param/observe
-  bursts" is unconfirmed here either way; revisit after a real heavy build session.
+- **Main-thread wedge: now confirmed on this machine (2026-09-14).** After a long
+  build session, a `run` that pulsed a custom parameter and then called
+  `project.save()` in the same call never returned. The save itself *succeeded* (the
+  `.toe` was written, correct size, correct timestamp) but no response came back, and
+  every subsequent request timed out.
+  Diagnosis afterwards: the TD process was **alive and healthy** — `STAT R`, 33-72%
+  CPU, no new `.ips` crash log, and port 9988 still `LISTEN`ing — so this is the Web
+  Server DAT's handler thread wedging, not a crash and not a deadlock of the whole
+  app. `curl` against the raw endpoint hung identically (`HTTP 000`), which rules out
+  the MCP client.
+  Precautions that follow from it: **never combine `project.save()` with anything else
+  in one `run`**, and save sparingly — the save is the one call here that reliably
+  blocks the main thread for a long time. Nothing was lost because the `.toe` had been
+  written; recovery is to restart TD and reopen the saved file.
+  Still unconfirmed whether rapid `set`/`observe` bursts alone can cause it.
 - Claude Code's MCP client connects to the bridge at session start. If TD wasn't up
   then, the tools stay missing for a while; the raw endpoint is still drivable with
   `curl` against `http://127.0.0.1:9988/mcp` (plain JSON-RPC) as a workaround, and the
