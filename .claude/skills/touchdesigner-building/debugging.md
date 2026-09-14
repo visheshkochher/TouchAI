@@ -129,6 +129,41 @@ Then check the GLSL TOP for compile errors:
 inspect: path="/project1/my_glsl"
 ```
 
+## Porting OpenGL-era .tox components to Metal
+
+Third-party components written for the OpenGL builds (particlesGPU and friends) hit
+two failures that look unrelated but usually show up together.
+
+- **`Error: Geometry Shaders not supported on this GPU or OS.`** — Metal has no
+  geometry shader stage, and TD will not emulate one. A GLSL MAT with a Geometry
+  Shader DAT errors outright and renders nothing. The fix is structural, not a
+  shader tweak: move the work into the vertex shader and give it real geometry to
+  work with. For the standard point → camera-facing-quad sprite expansion that
+  means rendering **4 vertices per particle instead of 1** — feed the GEO a 2×2
+  Grid SOP (`P.xy` spans `[-0.5, 0.5]`, so it doubles as the corner offset *and*
+  `texCoord0 = P.xy + 0.5`), copy it once per particle, and offset each vertex in
+  camera space (`uTDMats[0].worldCam` → offset → `uTDMats[0].proj`) exactly where
+  the geometry shader used to `EmitVertex()`. Watch three things: any per-vertex
+  index attribute must now count *quads* (`pointIndex // pointsPerCopy`), not
+  vertices; a Convert SOP set to `part` must become `poly` or it collapses the
+  quads back to points; and the geometry shader's "skip this particle" branch
+  (no `EmitVertex()`) becomes "park all 4 corners outside the clip volume", e.g.
+  `gl_Position = vec4(2.0, 2.0, 2.0, 1.0)` — not `vec4(0.0)`, whose `w = 0`
+  invites NaNs.
+  Worked example: `patches/particlesgpu-metal/` at the repo root.
+
+- **`TOP.depth` is 1 for every TOP on 2025.33230** — including a Tex3D TOP in
+  `texture2darray` mode, which genuinely *is* an array. Older builds reported 0
+  for a plain 2D texture, so the common idiom `op('x').depth == 0` meaning "not a
+  texture array" is now **stuck false everywhere**, and `depth > 0` stuck true.
+  Components that use it to decide whether to wrap a map in a Tex3D TOP end up
+  binding a plain 2D TOP to a `sampler2DArray`. That is only a *warning*
+  (`Sampler type of uniform X does not match up with that of the referenced TOP`),
+  and the render goes **completely black** — the sampler reads 0, so alpha is 0
+  and every fragment hits the alpha-discard. There is no working replacement
+  predicate exposed to Python, so route unconditionally through the Tex3D TOP
+  instead of trying to detect array-ness.
+
 ## Common `run` Errors
 
 - **`NameError: name 'glslTOP' is not defined`** — You're using a type constant that doesn't exist. Use `docs(type='list_types')` to find the correct name.
