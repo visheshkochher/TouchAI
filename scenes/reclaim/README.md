@@ -132,6 +132,10 @@ Two choices in there are worth keeping:
   roughly the same height as the signal (measured: baseline 0.77 against a signal
   maxing at 0.54) and the ratio never clears a threshold. The *rise* is what marks an
   onset, and it is naturally independent of how loud the track is.
+- **Note:** this interval-clustering estimator was later measured wandering 120-170bpm
+  on the bundled track. The `dispersal` scene replaces it with autocorrelation of the
+  onset envelope (±0.6% on the same material) — see `patterns.md`, "Tempo:
+  autocorrelate the onset envelope". Worth porting here.
 - **Median of recent intervals, not an EMA.** One spurious onset halves an EMA and
   drags the whole story speed with it; the median just ignores it. On the bundled test
   track the collected intervals run

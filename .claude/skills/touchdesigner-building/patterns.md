@@ -132,6 +132,46 @@ feedbackTOP (init: perlin noiseTOP, amp ~1.3, offset ~1)
   `rd_blur → convolveTOP(rd_sharpen)`, then `compositeTOP add(rd_blur, rd_sharpen)`
   is what actually continues the loop).
 
+### Stability: the sharpen term is positive feedback (do the arithmetic)
+
+The blur/sharpen balance is not a taste setting, it is a stability condition. Around
+the loop, diffusion multiplies high spatial frequencies by roughly `(1 - W)` per frame
+and the sharpen multiplies them by `(1 + R)`. The round trip is net-damping only while
+**R < W**. Above that the loop is an exponential amplifier running at 60fps.
+
+That is what the RD recipe *wants* — it is how coral grows out of a seed. It is
+catastrophic when you want the loop to hold an image. Measured while building a
+painting scene: a reaction term of **0.6% per frame** against a 0.4% diffusion
+compounds to `e^10` in thirty seconds, so the paper texture's own grain — amplitude
+0.03 — exploded and flooded the canvas to a flat field. Nothing in the picture was
+wrong; the loop was simply unstable, and it looked like "the strokes aren't sticking".
+
+The fix that removes the whole class of bug: **make the sharpen a ratio of the blur**,
+not an independent rate, so the stability threshold is a single readable number.
+
+```python
+# uR.x = diffusion per frame; uR.y = sharpen per frame
+react.par.vec0valuex.expr = "parent().par.Wetness"
+react.par.vec0valuey.expr = "parent().par.Wetness * parent().par.Reaction"
+# Reaction < 1 -> net damping (holds an image); > 1 -> grows structure (eats it)
+```
+
+### Price per-frame quantities by their integral, not their instantaneous value
+
+Anything applied every frame at 60fps needs its total effect worked out before it is
+dialled by eye. Three that were each wrong by an order of magnitude on first guess,
+and each *looked* like a different bug:
+
+| quantity | how it accumulates | measured mistake |
+|---|---|---|
+| diffusion (blur mixed in per frame) | variance adds: `sigma = sqrt(W·r²·60·s)` | a "tiny" 0.35px blur at W=0.10 is **27px after 30s** — every stroke erased |
+| displacement (per-frame UV shift) | shift adds over the envelope's area | 0.06/frame over a 2.6s envelope is **1.6 whole frame-widths** of drag per smear |
+| impulse (accel × envelope) | `Δv = k·τ/ln2` | a shove of 2.10 with a 0.85s envelope throws a particle **across the frame in 0.8s** |
+
+The tell is always the same: the effect looks catastrophic rather than strong, and the
+instinct is to hunt for a logic bug. Write the integral down first — it is one line of
+arithmetic and it is almost always the answer.
+
 ## Presence-gated displacement (aware, not reactive)
 
 Gate an RD loop's zoom/displace strength off a smoothed scalar "presence"
@@ -480,6 +520,76 @@ idiom in reference.md:
   RGB, scale from vel.a — and set instance rotate order to **pre-rot**, the
   rotate-to glitches otherwise. Color via rampTOP indexed by life or speed.
 
+## Audio reactivity that is actually visible (measured lessons)
+
+Four failures that all *look* like working code and all measure as dead:
+
+1. **Fixed 0..1 band ranges are a guess, and usually wrong.** The canonical chain's
+   `mathCHOP` fromrange values get tuned by eye on one track. Measured on real
+   material in one scene: the `high` band ran **0.27–6.26** and `energy` **0.78–5.77**
+   against code doing `min(1.2, high)` — so both sat *pinned at maximum* and every
+   mapping off them (sway, shimmer, glow, background) was a constant pretending to be
+   reactive. **Normalise adaptively** instead: divide each band by a slowly-decaying
+   peak of itself (`peak = max(v, peak*0.9988, floor)`, `v/peak`). Indifferent to
+   track, input gain, and mic-vs-file — which is what makes a scene survive soundcheck.
+2. **A beat flag is not an envelope.** `beatCHOP`/detector output is true for one frame
+   in ~24 at 120bpm. Anything driven straight off it (`radius * (1 + 0.11*kick)`)
+   changes for 16ms and is imperceptible. Decay an envelope from it
+   (`env *= 0.5**(dt/0.16)`, set to 1 on the beat) and drive visuals from *that*.
+   Verified on the render afterwards: head brightness +22.7% on-beat, r=0.35.
+3. **Detected events must do something unconditionally.** A drop that only fires a
+   scheduled story event does nothing at all when nothing is scheduled — the detector
+   fires and the screen doesn't move. Give every detection a standing visual response
+   (gust, ring, flash, shed a burst) and let the *story* events be the special case.
+4. **Reactive terms must modulate a resting value, not add on top of one.** Wiring a
+   beat in as `1.0 + 0.45*kick + 0.35*drop` leaves the silent scene correct and blows
+   the playing scene to white. Rebalance so the resting value is slightly *below* the
+   old constant and the peak is ~1.5–2x it.
+
+### Tempo: autocorrelate the onset envelope, don't cluster intervals
+
+Clustering inter-onset intervals (even by dominant cluster rather than median) is
+fragile: one missed beat contributes a double-length interval, one spurious onset a
+half-length one, both land inside any sane accepted range, and the estimate jumps
+between them. **Measured on the bundled test track: 120–170bpm inside forty seconds**,
+dragging story speed with it.
+
+Autocorrelating ~7s of the onset-flux signal uses every onset at once, so missing or
+doubling a few changes the peak's *height*, not its position. Same track, same
+detector front-end: **122.5–124.1bpm over 45s (±0.6%)** — and 124.1 is the correct
+tempo.
+
+```python
+st['flux_hist'].append(flux)            # positive flux of a dedicated kick band
+del st['flux_hist'][:-420]              # ~7s at 60fps
+if st['acc'] >= 15 and len(st['flux_hist']) >= 420 * 0.6:   # 4x/second is plenty
+    x = np.array(st['flux_hist']); x -= x.mean()
+    if x.std() > 1e-7:
+        ac = np.correlate(x, x, 'full')[len(x) - 1:]
+        lo, hi = int(60/200 * rate), int(60/55 * rate)      # bpm range -> lag range
+        best, bestscore = -1, -1e18
+        for lag in range(lo, hi + 1):
+            sc = ac[lag]                                    # HARMONIC SUM: this is
+            if lag*2 < len(ac): sc += 0.6 * ac[lag*2]       # what picks the
+            if lag*3 < len(ac): sc += 0.3 * ac[lag*3]       # fundamental over
+            if sc > bestscore: bestscore, best = sc, lag    # half-tempo
+        period = best / rate
+```
+
+The harmonic sum is the part that matters: at the true period, `lag`, `2*lag` and
+`3*lag` all land on autocorrelation peaks; at half the period they don't. Without it
+the estimator happily locks to double time. Follow with an **octave fold** toward the
+reference tempo (`while bpm > ref*1.45: bpm *= 0.5`) as a cheap safety net.
+
+**Phase-lock the story clock** rather than only scaling it: on each detected beat,
+nudge the accumulated musical time toward the nearest beat boundary by a *fraction*
+of the error (`musical -= err * 0.22`), never a snap — a snap jerks every envelope in
+the scene at once whenever the detector hiccups. That is the difference between a
+story that runs at the right speed and one that is genuinely counted in beats.
+
+Still true, and the reason the pads exist: **beat-locked beats beat-detected** for
+material you control. Detection is for material you don't.
+
 ## Strobe / tunnel vocabulary (Max Cooper-style)
 
 From the strobe-tunnel and spectral-tunnel projects, generalized:
@@ -496,3 +606,159 @@ From the strobe-tunnel and spectral-tunnel projects, generalized:
   off the bass band) for material you don't control.
 - A `timerCHOP` sequencing 20–40s phases (build → peak → release, different par sets
   via preset interpolation) is what separates a *set* from a looping patch.
+
+## Endless zoom: a nested stack with renormalisation
+
+For a continuous zoom that has to run for a whole set without a cut, do not animate a
+long scale ramp — the numbers blow up and the loop point is findable. Keep a stack of
+nested levels and renormalise.
+
+Each level holds geometry in a unit box plus a **focus point** where its child sits at
+`1/F` scale (F = 4 is the sweet spot: at 3 the child gives the reveal away early, at 6
+it is sub-pixel for most of its life and the handover pops). With `c[L]` the level's
+position in level-0 coordinates and `Z` the camera depth:
+
+```
+c[L+1] = c[L] + focus[L] * F**-L
+screen(p in level L) = (c[L] + p * F**-L - cam) * F**Z
+```
+
+Level L covers the frame exactly when `Z == L`, and its screen size is `F**(Z-L)`. That
+one number drives visibility, fading and depth grading; nothing else needs to know
+about scale. When Z leaves a one-unit band, generate a new outermost parent and shift
+every index:
+
+```
+c[L+1] = focus_new + c[L] / F     Z = Z + 1
+```
+
+The numbers land back where they started, so nothing accumulates and the zoom is
+genuinely endless. The inverse operation handles reversing the camera.
+
+**Derive the camera, never store it**: `cam(Z) = c[floor Z] + focus[floor Z] *
+F**-floor(Z) * smoothstep(frac Z)`. Putting the camera on the fixed accumulation point
+of the focus chain is the obvious choice and is wrong — the level meant to fill the
+frame ends up offset by its own focus radius and the octave above it dominates.
+Deriving it also means there is no camera state that can drift out of agreement with
+the stack.
+
+**Give each visual domain two levels, not one.** With one level per domain, the four-odd
+levels visible at any moment are four different looks superimposed and the frame reads
+as noise. With two, the viewer is nearly always looking at one structure at two scales,
+and a second domain appears only around a boundary — exactly where a change should be
+noticed.
+
+## Procedural structures: what actually makes each one recognisable
+
+Hard-won from building seven in one scene. In every case the recognisable feature was
+cheap and the detail was not.
+
+- **Independent jitter is a sawtooth, not a wander.** Offsetting each step of a path by
+  an independent ±j gives a perfect zigzag that reads as decorative border at any size.
+  Use a random *walk* with a small sigma against the step length, plus an occasional
+  deliberate dogleg.
+- **A leaf needs a margin.** Outline plus midrib and it is unmistakable; everything
+  else hangs off those two. Secondary veins must *terminate on the margin* (aim them at
+  a point on the edge via a bezier) — aiming at a fixed reach and adding sweep on top
+  makes every vein overshoot its own leaf.
+- **A river delta needs a coastline.** A dendritic fan alone is just a tree pointed
+  sideways. Also keep the downstream bias weak: a strong forward bias straightens every
+  distributary onto the same bearing and you get parallel streaks, not a fan.
+- **An orb web is a spiral, not concentric rings** — rings plus sag give a chevron
+  rosette. Space the capture spiral *arithmetically*; a geometric spiral takes enormous
+  steps past half radius and leaves the outer web as bare radii.
+- **A settlement is a density, not a grid** — avenues converging on a core, ring roads,
+  a grid thinning outward, and a river that ignores all of it. Blocks must hug the
+  roads; scattered at random they read as dirt on the lens.
+- **A cosmic web must be built node-first**, because what makes it recognisable is the
+  emptiness. Any growth process fills its box evenly and loses exactly that.
+- **Hierarchy by depth.** Emit a `kind` per segment (primary / secondary / fine) and
+  dim the fine class to ~0.55. Drawn at one weight throughout, a branching network
+  looks like hair and a city's buildings out-shout its roads.
+
+## Position-based dynamics for a stressed material (and its four traps)
+
+PBD is the right solver for anything that must deform, break and hold together on a
+stage: it projects positions to satisfy constraints instead of integrating a stiff
+force, so it cannot explode the way a spring network does the first time a bond breaks.
+But four things about it are not obvious, and each one is invisible in a short test.
+
+**1. Averaged Jacobi, or it diverges.** PBD applied to all constraints at once and
+summed means a node with V constraints receives V corrections per sweep; the effective
+relaxation factor is up to V times the per-constraint stiffness, and anything over 1
+diverges. In a triangular lattice V = 6. Divide the accumulated correction by the node's
+valence (`bincount` the endpoints), then optionally over-relax by ~1.5. Without this,
+positions reach 1e46 in forty sweeps — and if the model also breaks over-strained
+elements, **every diverging element is silently removed and the explosion is reported as
+brittle failure.** The rendered image looked plausible throughout.
+
+**2. It does not transmit load across a wide lattice.** PBD is Jacobi iteration:
+information travels one constraint per sweep, so loading two edges and expecting stress
+in the middle is solving Laplace's equation by relaxation — thousands of sweeps. At four
+sweeps a frame across a 77-column lattice, measured median strain was −0.0003. Impose
+the macroscopic deformation **affinely on every node** and leave the solver only the
+local relaxation around damage, which is what Jacobi converges on quickly.
+
+**3. Imposed strain leaks away — tether it.** With the affine field imposed and the
+interior free, PBD drives every element toward its rest length and eventually succeeds:
+the material stops feeling the load. It takes minutes, so it never shows up in a test.
+Tether every node weakly to its affine position each sweep. It is also the more honest
+model — the frame is a window onto a larger material, and the material outside is what
+holds the inside at the macroscopic strain. Verify by checking the strain distribution is
+identical after 120, 600 and 1800 sweeps.
+
+**4. Healing at the current length retires the element.** If broken elements re-form at
+whatever length they currently have (the obvious way to avoid a snap-back), each one
+comes back carrying no strain and never participates again. Use bounded plastic set:
+keep a fraction of the healed-at stretch, clamped to a few per cent of the original rest
+length. Check `rest/rest0` percentiles over many cycles; they must not walk.
+
+## Making fracture localise instead of fizzing
+
+A crack only forms if the crack tip is the **only** place above threshold. Everything
+that adds heterogeneity fights this:
+
+- **Discretisation heterogeneity swamps it.** A jittered lattice has intrinsic strain
+  spread (p10–p90 spanned 3.4× in one case) against which a tip's ~1.8× concentration is
+  nothing. Settle once at reference load, measure each element's own equilibrium strain,
+  and set its breaking strain proportional to it. Every element then sits at the same
+  fraction of failure under uniform load. A useful side effect: load fraction and stress
+  fraction become the same number.
+- **Do not correlate weakness with compliance.** Soft-and-weak regions fail everywhere at
+  once. Keep strength near-uniform and get the visual structure from a quantity that is
+  *not* what breaks — bond force (stiffness × strain) varies strongly where strain does
+  not, which is how force chains are visualised in the literature anyway.
+- **Nucleate a notch, not a scatter.** The N most-stressed elements are wherever the
+  disorder is worst, scattered; they concentrate stress nowhere. Clear a disc and you
+  have two tips. And in a slab that has been accumulating damage, pick the nucleation
+  site by how much *live* material surrounds it — otherwise it lands on the rim of an
+  existing void and cuts nothing.
+- **Shield the bulk while the crack runs.** Real cracks localise because the material
+  ahead is unloaded faster than it can fail. Make the breaking threshold a field during
+  propagation: normal inside a zone sweeping outward at crack speed, several times
+  tougher beyond it.
+- **Spread the propagation over frames.** 120 sweeps in four frames is 40 ms each and
+  drops frames at the exact moment the audience is looking. The same sweeps over half a
+  second cost 5 ms and the crack is visibly travelling, which is better anyway.
+
+## Detecting a build-up (not loudness)
+
+The loudest moment of a track is *after* the drop, so any "energy is rising" detector
+fires in the wrong place. A build-up is three things at once:
+
+- **rise** — short-window energy above long-window energy, normalised by a decaying peak
+  of that difference so it means the same on a quiet track as a loud one.
+- **lowcut** — the bass band *below* its own running median while overall energy is high.
+  The filter sweep. The most reliable of the three, because removing the low end is
+  precisely how a producer makes you want it back. Gate it on loudness or it fires
+  through every breakdown.
+- **density** — high-band onset rate against its own peak. Rolls doubling and tripling.
+
+Combine, apply a gamma (~0.7) because the three rarely peak together even in a textbook
+build, then smooth with a fast attack and a slow release. Derive **imminence** = tension
+that has been *held* for several seconds; a spike is not a build-up. Suppress everything
+for a few seconds after a drop.
+
+Gate the payoff event on it: a drop should only trigger the big change if the track
+actually built to it. Ungated, a steady four-to-the-floor track trips a sustained-bass
+drop test every few bars — measured at nine "drops" in forty seconds.

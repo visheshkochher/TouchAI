@@ -93,6 +93,134 @@ fallback when driving an older bridge:
    Measure headline numbers with `ui.performMode = True` (reference.md): editor UI
    rendering understates real fps.
 
+## Menu parameters accept invalid values silently (direct Python assignment)
+
+The bridge's `set` tool validates menu values and hands back the valid list on error.
+**Direct Python assignment does not.** `displace.par.vertsource = 'g'` raises nothing,
+logs nothing, leaves `errors()` empty — and the parameter reads back as `'red'`, the
+first menu entry. The real names were `red | green | blue | alpha | none`.
+
+That cost an hour in a scene where vertical displacement was silently being driven by
+the horizontal channel. Read menu parameters back after setting them, or ask first:
+
+```python
+print(op('x').par.vertsource.menuNames)     # the valid values
+op('x').par.vertsource = 'green'
+assert op('x').par.vertsource.eval() == 'green'
+```
+
+Same class of trap: a parameter you set to a plausible-looking number that happens to
+be the *disabling* value. `displaceTOP.uvweight` defaults to 1 and is the weight of a
+pixel's own coordinate — zero it and every pixel samples the same texel.
+
+Menu names are usually **abbreviated**, and the plausible spelling is the wrong one:
+
+| you'd write | actual | on |
+|---|---|---|
+| `srcalpha` / `oneminussrcalpha` | `sa` / `omsa` | MAT `srcblend`/`destblend` |
+| `r` / `g` | `red` / `green` | displaceTOP `horzsource`/`vertsource` |
+
+Both silently land on the menu's first entry — `zero` for a blend factor, which renders
+**nothing at all**. Always `print(par.menuNames)` first.
+
+## A Composite TOP in a feedback loop can amplify it
+
+Verified on 2025.33230: a `compositeTOP` set to `over`, with a **completely empty** top
+layer, expanded the buffer on every round trip. A canvas loop holding a paper texture
+(range 0.63–0.90) ran away to 0–4 within half a minute; bypassing the composite and
+wiring the rest of the loop straight through converged cleanly in the same test.
+
+If a feedback loop drifts and every individual stage looks like a pass-through, suspect
+the compositor. Doing the blend by hand in a GLSL TOP is one line and removes the
+question:
+
+```glsl
+vec4 dst = texture(sTD2DInputs[0], vUV.st);
+vec4 src = texture(sTD2DInputs[1], vUV.st);      // premultiplied
+fragColor = vec4(src.rgb + dst.rgb * (1.0 - clamp(src.a, 0.0, 1.0)), 1.0);
+```
+
+**A GLSL TOP has exactly 3 input connectors and they do not grow**, so a pass needing
+four inputs has to be split.
+
+## Alpha: decide premultiplied vs straight ONCE, per chain
+
+Most confusing-looking colour bugs in instanced sprite work are this. A `constantMAT`
+blends premultiplied by default (`srcblend='one'`), so a shader emitting `vec4(col*a, a)`
+is correct — until per-instance colour and alpha are added, at which point the ratio
+`rgb/alpha` in the rendered buffer stops matching the intended colour and any downstream
+premultiplied `over` either **adds** (ratio > 1: blows out to white) or **bites holes**
+(ratio < 1: marks eat the background without filling it).
+
+The reliable fix is to stop reasoning about it: emit **straight** alpha
+(`vec4(col, a)`), set the MAT to `srcblend='sa', destblend='omsa'`, and let the blend do
+the multiply. Then verify rather than assume — the ratio on lit pixels should equal the
+colour:
+
+```python
+a = op('render').numpyArray(delayed=False)
+rgb, al = a[:, :, :3], a[:, :, 3]
+m = al > 0.02
+print(np.median(rgb[m].max(axis=1) / al[m]))     # should be ~the colour, and <= 1
+```
+
+## Silent failures that leave `errors()` empty
+
+## `run` executes inside a single frame — you cannot step time within one call
+
+Cooking an operator several times in one `run` call does not advance anything: TD will
+not cook an op twice in the same frame, so a loop of `op.cook()` calls all return the
+same state. This makes feedback loops look frozen and stateful Script ops look stuck.
+
+To watch anything evolve, return from `run`, sleep **in the shell**, and call again —
+one sample per call. (Same root cause as the `time.sleep` rule: `run` owns the main
+thread for its whole duration.)
+
+## Agent-growth systems: uniform random selection starves the small
+
+Any system where elements are chosen to grow/act from a shared pool — space
+colonisation, L-systems with a step budget, particle emitters, diffusion-limited
+aggregation — will concentrate on whatever is already largest if the choice is uniform
+random over candidates. A cluster with 400 candidates wins ~99% of draws against one
+with 3, grows more candidates, and compounds. Measured in a root-growth scene: one
+origin reached 24 nodes while its neighbours reached 1130, with 597 of 610 remaining
+nutrients sitting unclaimed right next to the starved one.
+
+Two fixes, best applied together:
+
+```python
+# 1. weight the draw by unmet demand (food near the tip), not by candidate count
+w = attractor_count[eligible] ** 0.75
+pick = rs.choice(pool, size=n, replace=False, p=w / w.sum())
+
+# 2. floor: every sub-system with a live candidate gets at least one action per step
+for sy in np.unique(sys_of):
+    m = np.nonzero(sys_of == sy)[0]
+    chosen.add(int(m[np.argmax(counts[m])]))
+```
+
+Related trap in the same family: **a candidate with no demand is never eligible, so it
+never acts — ever.** Seed placement has to guarantee every origin starts with something
+in range, or one will sit at a single node for the whole run and its whole region stays
+empty.
+
+## Verify image metrics against the real reference, not a constant
+
+"Fraction of pixels differing from the background" is a good coverage metric and a
+terrible one if the background is not uniform. A vignetted paper texture spans
+0.63–0.90, so testing `abs(lum - 0.80) > 0.06` reported **0% coverage on a canvas that
+was 73% painted**. Compare against the actual reference TOP:
+
+```python
+cv = op('canvas').numpyArray(delayed=False)[:, :, :3]
+pp = op('paper').numpyArray(delayed=False)[:, :, :3]      # the real background
+coverage = (np.abs(cv - pp).mean(axis=2) > 0.03).mean()
+```
+
+`std` is an equally poor proxy: a stroke covering 1% of the frame moves the whole
+frame's standard deviation by less than the noise, so "std didn't change" says nothing
+about whether paint landed.
+
 ## Silent failures that leave `errors()` empty
 
 These produce no error anywhere — the op just does nothing, or does something wrong.
@@ -239,6 +367,24 @@ H.264/H.265 encoding. Where either applies, record manually:
 6. **Destroy the moviefileoutTOP** — left in the network it costs ~100s of ms per frame
    even when not recording.
 
+## `observe` previews are downscaled — don't judge fine detail from them
+
+`observe` returns a **480x270** PNG regardless of the TOP's real resolution. That is a
+2.67x downscale of a 1280x720 output, so anything at or near 1px in the real image is
+resampled below half a pixel and **aliases in the preview only**. Verified on a line
+scene: a 1.38px stem looked clearly dashed in the preview while the same column of the
+real `final_out` measured a single continuous 396-pixel run.
+
+Before "fixing" thin-line artifacts, bands, moire or dropout seen in a preview, measure
+the full-res buffer:
+
+```python
+a = op('/project1/scene/final_out').numpyArray(delayed=False)   # full resolution
+lum = a[:, :, :3].sum(axis=2)
+```
+
+The preview is for composition, colour and motion. Per-pixel questions need the array.
+
 ## Observe Side Effects & Pull-Based Cooking
 
 `observe` advances `me.time.frame` by several frames per captured frame. This is normally fine for visual work, but be aware if timeline position matters for your project logic.
@@ -256,6 +402,22 @@ copies in snapshots but are smooth in live playback. To verify a CHOP over time,
 - `op.cookTime` is already in **milliseconds** — don't multiply by 1000. The first read
   after a rebuild can show a huge one-off spike from the initial cook; re-read a moment
   later for the steady-state number. Walk children's cookTime to find hotspots.
+- **`cookTime` (and the `health` hotspot table built on it) can accuse the wrong
+  operator.** It appears to bill an op for chain work it *triggered* rather than did, so
+  a trivial op that happens to pull first in the frame wears the cost of everything
+  upstream. Verified on 2025.33230: three Script CHOPs producing 10/10/40 samples each
+  reported ~1.5 ms, and `health` listed them as the scene's top hotspots — timed
+  directly with 300 forced cooks in a loop they were **0.024 / 0.036 / 0.057 ms**. A
+  GLSL TOP in the same table reported 32 ms, which was its one-time shader compile.
+  Before optimising anything a hotspot table names, time it:
+  ```python
+  import time
+  o.cook(force=True)                       # warm it
+  t0 = time.perf_counter()
+  for _ in range(300): o.cook(force=True)
+  print((time.perf_counter() - t0) / 300 * 1000.0, 'ms/cook')
+  ```
+  And before optimising at all: if real fps is already at target, stop.
 - Also available per-op from `run`: `op.gpuCookTime` (GPU ms), `op.cpuMemory` /
   `op.gpuMemory` (bytes). Sort children by these to rank hotspots in one pass:
   ```python
@@ -304,3 +466,166 @@ In the TD UI (tell the user if driving manually): Performance Monitor (alt+Y) sh
 frame's full cook list with ms per op; palette **Probe** overlays live CPU/GPU cost per
 node over time. Both exist only interactively — from the bridge, use the cookTime/
 gpuCookTime walk instead.
+
+## A Script OP that raises stops cooking — and `health` will not tell you
+
+An uncaught exception inside `onCook` does not put the operator into an error *state*;
+it simply stops publishing. Downstream geometry freezes at its last good frame, the
+project-wide error sweep comes back clean, and the only symptom is "that control does
+nothing". In `as_above`, one undefined name in a generator froze the entire zoom while
+`health` reported zero errors and zero warnings, and the cause was only visible by
+calling the failing function directly from the console.
+
+- Suspect this whenever a control has no effect but nothing is reported broken. Check
+  `op.totalCooks` over a couple of seconds: a Script OP that has stopped cooking is
+  the tell.
+- In any generator/simulation that a live performance depends on, wrap the risky call
+  in try/except and substitute a placeholder. Mid-set the right answer is an ugly
+  frame with a line in the log, not a dead one.
+
+## `run` splits globals from locals, so probe code cannot see its own names
+
+The bridge executes with separate globals and locals dicts. Any function, class or list
+comprehension *defined inside the code you send* runs in a scope that cannot see names
+bound at the top level of that same snippet — you get `NameError` on a name that is
+plainly three lines above. Write probe scripts to a file and send them through the
+`g = dict(globals()); exec(compile(code, name, 'exec'), g)` wrapper instead of inlining
+them, or keep every probe strictly free of `def` and comprehensions.
+
+## Multi-scale compositions: price the ink by segment length
+
+When several scales of the same structure are on screen at once, brightness alone will
+not balance them. A segment one octave out is F times longer and therefore lays down F
+times the light, so the outer context stays louder than the subject no matter how the
+opacity fades are tuned — and tuning them harder just makes the outer level vanish
+abruptly instead of gracefully. Charge each segment for its own screen length
+(`clip(LENREF / len, floor, 1)`) and the fades go back to meaning what they say.
+Measured in `as_above`: after the change the subject level owned 85.9% of the frame's
+ink, against 7.1% for the octave above it.
+
+Related: **verify a scale-invariance claim numerically, not by eye.** If a design says
+an operation is supposed to change nothing on screen, compare the actual instance
+arrays across it. `as_above`'s renormalisation step was confirmed by grabbing every
+live instance channel before and after a prepend — `max abs diff 0.000000` on all of
+tx/ty/rz/sy/a, identical total ink — which is a much stronger statement than "I
+couldn't spot the seam".
+
+## Script CHOP output: never build Python lists per frame
+
+`chan.vals = array.tolist()` is the idiomatic way to fill a Script CHOP and it is a slow
+poison for anything that runs for hours. At 24,000 samples × 11 channels it allocates a
+quarter of a million Python float objects **per frame** — fifteen million a minute. It
+does not leak, but it is constant GC pressure, and GC pauses show up as occasional
+dropped frames deep into a long session and never in a two-minute test.
+
+- `Chan.copyNumpyArray(arr1d)` — float32, length = numSamples — is a memcpy with no
+  Python objects created. Keep one preallocated `(numChans, numSamples)` float32 buffer
+  and copy row by row.
+- `scriptOp.copyNumpyArray(arr2d)` takes the whole block in one call but **renames every
+  channel to `chan1..chanN`**. That silently breaks instancing: the geometry COMP looks
+  up `tx` by name, fails, and emits a *warning*, not an error.
+- Build the channel layout once and only rebuild it when the sample count changes.
+
+Same discipline for the per-frame maths: preallocate every working array in the state
+dict and use `out=` on every numpy call. A naive publish step allocated ~20 arrays of
+24,000 doubles per frame.
+
+## Long-run failure modes are invisible in short tests — look for them on purpose
+
+Three separate slow leaks in one scene, none of which affected the first two minutes:
+a solver that relaxed its imposed load away over minutes, healed elements that quietly
+retired themselves one cycle at a time, and a "permanent memory" quantity that saturated
+to 82% of the model. Each was found only by running for several minutes and printing
+distributions, not by looking.
+
+Worth a standing check for anything that will run for a whole set:
+
+- `len(gc.get_objects())` sampled over minutes — should be flat.
+- Every accumulating list bounded **twice**, by age *and* by length.
+- Every quantity meant to be permanent given a decay long enough to outlast one track
+  and short enough to not saturate over a set.
+- Any ratio that is supposed to be stationary (`rest/rest0`, strain percentiles) printed
+  at intervals — it must not walk.
+- Real fps from frame deltas, plus `op.cookTime` sampled repeatedly: report the
+  **median and p90**, because a single burst (a one-frame effect) hides in an average
+  and is exactly what will stutter on stage.
+
+## Verify a patch matched before writing the file
+
+Two rounds of debugging a "too dark" image were spent on a display expression that was
+arithmetically wrong because an earlier `str.replace` had silently matched nothing and
+left `ratio * heat` — a product of two sub-unity numbers — in place. When scripting edits
+into a large generated file, collect all the search strings, assert every one is present
+*before* applying any of them, and write only then. A replace that matches nothing must
+be a hard error, never a no-op.
+
+Related: when the body of a Script DAT is a triple-quoted string in the builder, a
+backslash continuation appears as `\\` in the file but `\` in the DAT. Patch scripts must
+use raw strings, and syntax checks must compile the *evaluated* literal (via `ast`), not
+the source text.
+
+## Both of TD's obvious frame-rate metrics can lie — measure the frame PERIOD
+
+This cost most of a session. A scene reported a steady 60.0 fps while actually running
+at 16, and the error was in the flattering direction the whole way.
+
+- **`absTime.frame` deltas over wall clock** — which is what this bridge's `health` tool
+  reports as `real_fps` — is **60 by construction**. TouchDesigner advances the frame
+  counter to track wall time and *skips* numbers when it cannot keep up, so frames
+  counted this way always match the timeline rate.
+- **`op.cookTime`** is unreliable for any operator that is also explicitly `.cook()`ed
+  from a frame callback: it double-counts. In the same scene it read 18 ms at three
+  solver sweeps and 43 ms at fourteen, while measured fps did not move — which is what
+  finally showed both numbers were disconnected.
+
+The metric that does not lie: timestamp every `onFrameStart` with `time.perf_counter()`
+and take the **median difference**. An idle project reads 16.67 ms exactly, so the
+baseline is unambiguous and any excess is real.
+
+Two rules for doing it:
+
+- **Instrument from outside the scene under test.** Putting the stamper in the scene's
+  own `frame_exec` measures the instrumentation — and `fetch`/`store` on a COMP every
+  frame is not free. Use a separate Execute DAT at project level with a module-level
+  list.
+- **Confirm with a load-scaling experiment.** Multiply the work (e.g. quadruple the
+  solver iterations) and check the number moves proportionally. If it does not, the
+  metric is not measuring what you think.
+
+Bypass-bisection needs care too: bypassing one TOP does not stop the others cooking, and
+bypassing an operator that feeds *parameter expressions* (e.g. a director CHOP read by
+`op('director')['x']` all over the render chain) freezes everything downstream and looks
+like that one operator was the entire cost. `allowCooking = False` on the whole COMP is
+the clean way to establish a baseline.
+
+## The "keep it cooking" frame callback is expensive — measure before keeping it
+
+The common pattern of cooking a simulation and its director from `onFrameStart` so they
+never stall when the scene is off screen forces the operator **and its whole upstream
+chain** to cook out of band; when the render then pulls it in the same frame, it cooks
+**again**. Measured on one scene against a 16.67 ms idle baseline:
+
+| callback body | fps | frame |
+|---|---|---|
+| empty | 60.0 | 16.67 ms |
+| `op('director').cook()` | 33.9 | 29.51 ms |
+| `op('material').cook()` | 23.7 | 42.15 ms |
+| both | 22.1 | 45.31 ms |
+
+Two lines of "safety" cost 26 ms a frame. During a show the output is on a projector, so
+the render pulls everything anyway and the callback is pure waste — default it off and
+switch it on only when the scene genuinely has to run while nothing is displaying it.
+(Guarding it with `op.cookFrame != frame` does not work: `cookFrame` is not comparable to
+`absTime.frame`.)
+
+## Render-chain cost is passes, not pixels
+
+Ten 16-bit 720p passes to composite a background, cut and blur highlights, add them back
+and grade cost ~13 ms of pure bandwidth on one machine — most of a frame budget spent
+moving the same pixels in and out of memory. Background generation, compositing, bloom
+add, vignette and grade are all **pointwise**, so they collapse into a single GLSL TOP;
+only a blur genuinely needs its own pass, and it can run at quarter resolution. Also:
+`transparency='sortedblending'` on a renderTOP asks for a depth sort of every instance
+every frame — pointless when depth test and depth write are off. And a text TOP
+re-renders whenever its string changes, so a readout that ticks every frame at full
+resolution cost 14.5 ms; quarter resolution plus coarsened values made it free.
