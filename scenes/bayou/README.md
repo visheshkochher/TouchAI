@@ -141,6 +141,37 @@ water and earth, not void.
 
 ## What went wrong, and what it cost
 
+**The playhead is a difference between two things with different lifetimes, and it
+froze the whole journey.** `show = musical - Timeoffset`, where `musical` is module
+state that resets to zero whenever the director DAT reloads — a rebuild, reopening
+the `.toe`, restarting TD — and `Timeoffset` is a parameter that survives all of
+those. After any reload the scene computes `musical(small) - Timeoffset(large)`, the
+clamp turns it into zero, and the alligator stands at the first reed of the swamp
+indefinitely. Observed live: offset **530.9** against a musical of **59.5** — eight
+minutes of nothing, while every other readout looked healthy. Audio locked at 124.14
+BPM, 2044 lines drawn, zero errors, zero warnings. A frozen story inside a working
+scene, which is the hardest kind to spot.
+
+`Showt` is a parameter too, so it knows where the journey had got to. The offset is
+now re-derived from it on the first cook after a reload, and healed the same way if
+the two disagree again, so the walk **resumes where it left off** instead of hanging.
+Only the before-the-start case counts as a fault: running off the far end is normal
+and permanent, because that is what holds him on the lake.
+
+**The frame-start keep-alive was worse than nothing, and is gone.** It called
+`.cook()` on the director and the engine every frame to keep the journey running off
+screen — but `.cook()` without `force=True` on a chain nothing is pulling is a no-op,
+so it never did. Measured: 0 of 67 operators cooked over 690 off-screen frames with
+it installed and active. All it actually did was run a Python callback sixty times a
+second, forever, in every scene carrying a copy. The scene is pull-based now and says
+so: unselected it costs one Audio Device In tick, and its clock resumes rather than
+jumping when you cut back to it.
+
+**`antialias='msaa4x'` is not a valid menu name on this build.** TD accepts an invalid
+menu value silently and lands on entry zero, so this scene rendered with *no*
+multisampling from the day it was written; the real names are `aa1 … aa32`. Later
+scenes assert menu values against `menuNames` before assigning them.
+
 **"Below the waterline" is not the same as "in the water".** The rule keyed on
 absolute y, so the bank strata — earth, drawn in section under a mud bank that is
 *above* the water — were dimmed cyan and faded to nothing, and the lower third of the

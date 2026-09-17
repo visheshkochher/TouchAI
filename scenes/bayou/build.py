@@ -459,7 +459,7 @@ DIRECTOR_BODY = '''# Musical time is monotonic and never seeks. The PLAYHEAD is 
 # the engine cooks twice in a frame or not at all; a counter read as a delta is not.
 import math
 
-_clock = {'last_raw': None, 'musical': 0.0}
+_clock = {'last_raw': None, 'musical': 0.0, 'primed': False}
 _st = {'peak': {'bass': PEAKFLOOR, 'high': PEAKFLOOR, 'energy': PEAKFLOOR},
        'kickenv': 0.0, 'kickslow': 0.0, 'dropenv': 0.0,
        'look': 0, 'gust': 0, 'reseed': 0,
@@ -533,8 +533,42 @@ def onCook(scriptOp):
 
     # The playhead is CLAMPED, not wrapped: the lake at the end stays until someone
     # seeks back to the swamp. A journey that silently restarts is not a journey.
+    #
+    # BUT IT IS A DIFFERENCE BETWEEN TWO THINGS WITH DIFFERENT LIFETIMES, and that
+    # froze this scene for an entire session. `musical` is module state and resets
+    # to zero every time this DAT reloads — a rebuild, reopening the .toe,
+    # restarting TD. `Timeoffset` is a parameter and survives all of those. So after
+    # any reload the scene computes musical(small) - Timeoffset(large), the clamp
+    # turns that into zero, and the alligator stands at the first reed of the swamp
+    # until musical climbs back past the stale offset. Observed live: offset 530.9
+    # against a musical of 59.5, i.e. eight minutes of nothing, with every other
+    # readout looking healthy — audio locked at 124 BPM, 2044 lines drawn, no
+    # errors. A frozen story with a working scene around it.
+    #
+    # Showt is a parameter too, so it knows where the journey had got to. Re-derive
+    # the offset from it on the first cook after a reload and the walk resumes where
+    # it left off; heal the same way if the two ever disagree again.
     slen = max(1.0, float(par.Storylen.eval()))
-    show = min(slen, max(0.0, musical - float(par.Timeoffset.eval())))
+    off = float(par.Timeoffset.eval())
+    if not _clock['primed']:
+        _clock['primed'] = True
+        try:
+            was = min(slen, max(0.0, float(par.Showt.eval())))
+        except Exception:
+            was = 0.0
+        off = musical - was
+        par.Timeoffset = off
+    elif musical - off < -0.5:
+        # Only the BEFORE-the-start case is a fault. Running off the far end is
+        # normal and permanent: once he reaches the lake, musical - off grows
+        # past Storylen forever and the clamp is what holds him there.
+        try:
+            was = min(slen, max(0.0, float(par.Showt.eval())))
+        except Exception:
+            was = 0.0
+        off = musical - was
+        par.Timeoffset = off
+    show = min(slen, max(0.0, musical - off))
 
     pending = comp.fetch('pending', None)
     if pending:
@@ -2365,25 +2399,18 @@ if kcb is None:
 kcb.nodeX, kcb.nodeY = 1780, 620
 kcb.text = hdr(CHECKPOINTS=CHECKPOINTS) + KEY_BODY
 
-frame_exec = C(executeDAT, 'frame_exec', 2260, 1000)
-frame_exec.text = '''# TD only cooks what something is pulling on. The director holds musical time and
-# the event counters; the engine holds the walk. Neither may stop when the scene is
-# off screen, or the journey pauses and then jumps when it comes back.
+# NO FRAME-START KEEP-ALIVE, and the one that used to be here was worse than
+# nothing. It called `.cook()` on the director and the engine every frame to keep
+# the journey running while the scene was off screen — but `.cook()` without
+# `force=True` on a chain that nothing is pulling is a no-op, so it never did
+# that. Measured: 0 of 67 operators cooked over 690 off-screen frames with it
+# installed and active. All it actually did was run a Python callback 60 times a
+# second, in every scene that carries one, forever.
 #
-# Order matters: the director publishes the counters the engine reads in the same
-# frame.
-
-
-def onFrameStart(frame):
-    d = op('director')
-    if d is not None:
-        d.cook()
-    e = op('engine')
-    if e is not None:
-        e.cook()
-    return
-'''
-soft(frame_exec, framestart=True)
+# The honest behaviour is the pull-based one, and on a sixteen-tox switch it is
+# also the behaviour you want: unselected, this scene costs one Audio Device In
+# tick and nothing else, and its clock resumes where it left off when you cut
+# back to it rather than jumping.
 
 s.par.display = True
 s.par.opviewer = final_out.path
