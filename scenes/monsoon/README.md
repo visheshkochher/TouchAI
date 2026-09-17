@@ -165,28 +165,55 @@ with the editor out of the tox, or in Perform mode.
 
 ## The screen must never go black
 
-A blackout mid-set is the worst failure this scene has, so it is now guarded in two
-places rather than debugged once:
+This blacked out in performance, and the first attempt to fix it made one of the
+two causes **worse**. Both are now closed, and both were closed against a
+fault-injection test rather than against a hopeful soak.
 
-- **Every frame is validated before it is published.** One instance with a
-  non-finite or runaway transform is a quad that covers the entire frame, and
-  whatever garbage landed in its `z` sorts it to the front. Non-finite values are
-  zeroed and width/length are clamped to `MAXW`/`MAXL` — no legitimate quad is wider
-  than a building is tall or longer than the road band. The count is on the
-  `Bad Quads Clamped` readout.
-- **An exception re-publishes the last good frame instead of dying.** An error inside
-  `onCook` used to take the Script CHOP out entirely, and what the room sees when
-  that happens is the screen going black. The worst case is now one dropped frame
-  nobody can see, plus a traceback printed once. This guard earned itself during
-  development: it caught a real `UnboundLocalError` and the scene kept running.
+**Cause 1 — the guard itself.** The first pass "protected" a runaway instance by
+zeroing its non-finite fields and clamping width/length to `MAXW`/`MAXL`. Zeroing a
+bad `tx` parks the quad at the centre of the frame, and the clamp was 0.70 × 3.20
+world units against a frame of 2.0 × 1.125 — so the guard took a broken row and
+rendered it as a near-black slab across the middle of the screen. It was not
+removing the runaway, it was resizing it to *merely enormous* and drawing it dead
+centre. A bad row is now **dropped** (size and alpha zeroed), and the bounds are the
+real ones: no legitimate quad is wider than a building is tall (0.50) or longer than
+the road band (2.80).
 
-**Honest status: the reported blackout was not reproduced.** A two-minute soak across
-all eight chapters — including the thunder chapter, with the audience accumulating —
-held output luminance between 0.17 and 0.23 with **zero clamped quads and zero engine
-errors**. The label TOP was ruled out directly (alpha mean 0.0005; only glyph
-pixels). So the guard is insurance, not a confirmed fix. If it recurs, read
-`Bad Quads Clamped` — if it is climbing, the cause is geometry; if it stays at zero,
-the cause is downstream of the engine.
+**Cause 2 — a bad uniform, laundered by Python's own clamp idiom.** `min(1.0,
+max(0.0, nan))` is `nan`: Python's min/max *propagate* NaN rather than rejecting it,
+so the usual clamp passes one straight through to a parameter, out to a shader
+uniform, and into a multiply against the whole frame. Everything leaving the engine
+now goes through `_sane()`, and every uniform entering the shader goes through
+`san()`, which tests `v == v` (false only for NaN) and falls back to an explicit
+**default** — never to the low bound. That distinction was itself a bug I shipped and
+then measured: falling back to the low bound turned a bad `Brightness` into
+`col *= 0.05`, which is a black screen by another route (**measured mean 0.0087**).
+
+**Last line of defence.** The shader ends with a NaN test and a floor. If anything at
+all survives the guards, the frame falls back to the sky gradient instead of to
+black. In normal operation the floor never engages — the darkest pixel in a live
+frame measures 0.072 against a floor of 0.020.
+
+### Fault injection, measured
+
+Every one of these is a deliberate injection, with the output's mean luminance
+measured off the real buffer. Black is below 0.02; baseline is 0.204.
+
+| injected | before | now |
+|---|---|---|
+| `NaN` → Brightness uniform | **0.0087 (black)** | 0.074 |
+| `NaN` → Rainnow / Labelfade | — | 0.204 (no change) |
+| `inf` → Vignette | — | 0.159 |
+| `NaN` → Ink / Glow / Lamp | — | 0.179 – 0.253 |
+| full-frame black quad reaching the render target | **black** | 0.141 |
+| `NaN`-sized quad reaching the render target | **black** | 0.183 (renders nothing) |
+
+And a 140-second soak across a full eight-chapter cycle at `Storylen 110`: 70 samples,
+**minimum mean luminance 0.1742**, zero clamped quads, zero engine errors. The darkest
+frame in the whole pass was still nine times above the blackout threshold.
+
+If it ever recurs, read **`Bad Quads Clamped`**: climbing means geometry, flat at zero
+means the cause is downstream of the engine.
 
 ## What went wrong, and what it cost
 

@@ -750,6 +750,22 @@ def _rh(i):
     return x - math.floor(x)
 
 
+def _sane(v, dv=0.0, lo=-1.0e6, hi=1.0e6):
+    """Python's min/max PROPAGATE NaN rather than rejecting it.
+
+    `min(1.0, max(0.0, nan))` is nan, so the usual clamp idiom launders a NaN
+    straight through into a parameter, out to a shader uniform, and the whole
+    frame comes back black. Everything that leaves this engine goes through here.
+    """
+    try:
+        v = float(v)
+    except Exception:
+        return dv
+    if v != v or v in (float('inf'), float('-inf')):
+        return dv
+    return lo if v < lo else (hi if v > hi else v)
+
+
 # --- the city, blocked in flat ---------------------------------------------------
 # A building is ONE filled quad plus its windows. Static, generated once per seed:
 # 12 blocks and their windows come to under 40 KB, which is the whole argument for
@@ -1171,8 +1187,8 @@ def _frame(scriptOp):
         S['seen'] = keep
     rs = S['rng']
 
-    slen = max(1.0, ch('storylen', 240.0))
-    f = min(1.0, max(0.0, ch('show', 0.0) / slen))
+    slen = _sane(ch('storylen', 240.0), 240.0, 1.0, 1.0e5)
+    f = _sane(ch('show', 0.0) / slen, 0.0, 0.0, 1.0)
     ink = float(par.Ink.eval()) * (1.0 + 0.08 * kickenv + 0.12 * dropenv
                                   + 0.30 * flash)
     rainpar = float(par.Rain.eval())
@@ -1195,8 +1211,10 @@ def _frame(scriptOp):
     crowd = float(np.interp(f, ARC_F, ARC_CROWD))
     thun = float(np.interp(f, ARC_F, ARC_THUN)) * thunpar
     wind = float(np.interp(f, ARC_F, ARC_WIND)) * windpar
-    rain = rain * (1.0 + (0.06 * energy - 0.02) * raudio)
-    wind = wind * (1.0 + (0.08 * bass - 0.03) * raudio)
+    rain = _sane(rain * (1.0 + (0.06 * energy - 0.02) * raudio), 0.0, 0.0, 4.0)
+    wind = _sane(wind * (1.0 + (0.08 * bass - 0.03) * raudio), 0.0, -6.0, 6.0)
+    thun = _sane(thun, 0.0, 0.0, 4.0)
+    ink = _sane(ink, 1.0, 0.0, 6.0)
 
     nbolt = _delta(S, d, 'boltcnt')
     npass = _delta(S, d, 'passercnt')
@@ -1562,15 +1580,18 @@ def _frame(scriptOp):
     # whatever garbage landed in its z, it paints the screen out for exactly as
     # long as the bad value survives. Nothing upstream is allowed to be trusted
     # here: validate, clamp, count, and carry on.
-    bad = ~np.isfinite(out)
-    nbad = int(bad.sum())
+    colbad = ~np.isfinite(out)
+    nbad = int(colbad.any(axis=0).sum())
     if nbad:
-        out = np.where(bad, 0.0, out)
-    over = int(((out[4] > MAXW) | (out[5] > MAXL)).sum())
-    if over:
-        out[4] = np.clip(out[4], 0.0, MAXW)
-        out[5] = np.clip(out[5], 0.0, MAXL)
-    S['rejects'] = S.get('rejects', 0) + nbad + over
+        out = np.where(colbad, 0.0, out)
+    kill = (colbad.any(axis=0) | (out[4] > MAXW) | (out[5] > MAXL))
+    nkill = int(kill.sum())
+    if nkill:
+        # not clamped — REMOVED. A clamped runaway is still a slab across the frame.
+        out[4] = np.where(kill, 0.0, out[4])
+        out[5] = np.where(kill, 0.0, out[5])
+        out[10] = np.where(kill, 0.0, out[10])
+    S['rejects'] = S.get('rejects', 0) + nkill
     S['lastout'] = out
 
     scriptOp.clear()
@@ -1591,10 +1612,10 @@ def _frame(scriptOp):
     try:
         par.Chapter.val = float(cp)
         par.Segs.val = float(n)
-        par.Rainnow.val = min(1.0, max(0.0, rain))
-        par.Windnow.val = wind
+        par.Rainnow.val = _sane(rain, 0.0, 0.0, 1.0)
+        par.Windnow.val = _sane(wind, 0.0, -4.0, 4.0)
         par.Walkers.val = float(len(S['people']))
-        par.Labelfade.val = lf
+        par.Labelfade.val = _sane(lf, 0.0, 0.0, 1.0)
         par.Rejects.val = float(S.get('rejects', 0))
         par.Audience.val = float(sum(1 for q in S['people'] if q.get('watch')))
         txt = CHECKPOINTS[cp][1].strip()
@@ -1680,7 +1701,9 @@ eng_src.text = hdr(
              (-0.86, 1), (0.30, 0), (-0.28, 0), (1.12, 2), (-1.10, 2)),
     # no legitimate quad is wider than a building is tall, or longer than the
     # road band; anything past these is a runaway and is clamped, not drawn
-    MAXW=0.70, MAXL=3.20,
+    # the widest legitimate quad is a building's height and the longest is the
+    # road band; anything past these is a runaway and is dropped, not resized
+    MAXW=0.50, MAXL=2.80,
     # THE WEATHER IS AN ARC, NOT A LEVEL. Three dry chapters with a rising wind,
     # the first drops at chapter 4, and the sky does not open until chapter 6 —
     # thunder is exactly zero before then, so it cannot leak early. Endpoints
@@ -1801,6 +1824,18 @@ const vec3 CSTREET= ''' + _g3(PAL['ROAD']) + ''';
 const vec3 CRED   = ''' + _g3(PAL['LAMP']) + ''';
 const vec3 CFLASH = ''' + _g3(PAL['FLASH']) + ''';
 
+// NaN fails every comparison including with itself, so `v == v` is false only
+// for NaN. One NaN uniform reaching the maths below turns the entire frame into
+// NaN, and a NaN written to a render target reads as BLACK. Nothing from outside
+// this shader is used before it has been through here.
+// The fallback is an explicit DEFAULT, never the low bound. Falling back to the
+// low bound is fine for something additive and catastrophic for a multiplier:
+// a bad Brightness became `col *= 0.05` and blacked the frame just as thoroughly
+// as the NaN would have. Measured: mean 0.0087.
+float san(float v, float lo, float hi, float dv) {
+    return (v == v) ? clamp(v, lo, hi) : dv;
+}
+
 float hash21(vec2 p) {
     p = fract(p * vec2(233.34, 851.73));
     p += dot(p, p + 23.45);
@@ -1826,11 +1861,20 @@ float sheet(vec2 uv, float sc, float speed, float slant, float thin, float t) {
 
 void main() {
     vec2 uv = vUV.st;
-    float hz = uD.y;
-    float t = uA.w;
-    float rain = uA.z;
-    float flash = uA.x;
-    float after = uA.y;
+    float hz    = san(uD.y, 0.02, 0.98, 0.42);
+    float t     = san(uA.w, 0.0, 1.0e7, 0.0);
+    float rain  = san(uA.z, 0.0, 2.0, 0.0);
+    float flash = san(uA.x, 0.0, 1.0, 0.0);
+    float after = san(uA.y, 0.0, 1.0, 0.0);
+    float beat  = san(uD.z, 0.0, 1.0, 0.0);
+    float bassu = san(uB.x, 0.0, 2.0, 0.0);
+    float eneru = san(uB.y, 0.0, 2.0, 0.0);
+    float vign  = san(uB.z, 0.0, 1.6, 0.70);
+    float brite = san(uB.w, 0.25, 4.0, 1.00);
+    float lampa = san(uC.z, 0.0, 3.0, 1.00);
+    float windu = san(uC.w, -4.0, 4.0, 0.0);
+    float glowa = san(uD.x, 0.0, 4.0, 0.50);
+    float labf  = san(uD.w, 0.0, 1.0, 0.0);
 
     // --- the air -------------------------------------------------------------
     float above = clamp((uv.y - hz) / max(1.0 - hz, 0.001), 0.0, 1.0);
@@ -1843,9 +1887,8 @@ void main() {
     // plus a tighter bloom sitting on the horizon. It is the largest area in the
     // frame, so it carries the track at an amplitude nothing else can: small
     // enough per-kick to stay weather, big enough to be felt from the back.
-    float beat = uD.z;
     col += vec3(0.150, 0.082, 0.245) * beat
-           * (0.28 + 0.72 * pow(above, 0.55)) * uB.w;
+           * (0.28 + 0.72 * pow(above, 0.55)) * brite;
     col += vec3(0.105, 0.062, 0.185) * beat * exp(-abs(uv.y - hz) * 2.6);
 
     // --- the street: a film, so it mirrors the air and shimmers --------------
@@ -1863,13 +1906,13 @@ void main() {
     // --- his lamp, pooled on the wet road ------------------------------------
     vec2 lp = vec2(uv.x - uC.x, (uv.y - uC.y) * 1.30);
     float lr = length(lp * vec2(1.0, 1.0));
-    float lamp = exp(-lr * lr * 62.0) * (0.85 + 0.35 * uD.z);
+    float lamp = exp(-lr * lr * 62.0) * (0.85 + 0.35 * beat);
     vec2 sp = vec2(uv.x - uC.x, (uv.y - (2.0 * hz - uC.y)) * 2.6);
     float smear = exp(-dot(sp, sp) * 16.0) * step(uv.y, hz);
-    col += CRED * uC.z * (lamp * 0.30 + smear * 0.20);
+    col += CRED * lampa * (lamp * 0.30 + smear * 0.20);
 
     // --- three sheets, far to near -------------------------------------------
-    float w = uC.w;
+    float w = windu;
     float r = 0.0;
     r += sheet(uv, 26.0, 0.55, w * 0.22, 30.0, t) * 0.17;
     r += sheet(uv, 15.0, 0.95, w * 0.26, 22.0, t) * 0.22;
@@ -1877,25 +1920,39 @@ void main() {
     r *= 0.06 + 0.94 * rain;
     // the strike is what makes the whole volume of it visible at once
     r *= 1.0 + 3.4 * flash;
-    col += CRAIN * r * (0.30 + 0.06 * uB.y);
+    col += CRAIN * r * (0.30 + 0.06 * eneru);
     // haze, heaviest just above the road
     col += mix(CRAIN, SKYLOW, 0.55) * rain * 0.085
-           * exp(-abs(uv.y - hz) * 3.2) * (0.85 + 0.15 * uB.x);
+           * exp(-abs(uv.y - hz) * 3.2) * (0.85 + 0.15 * bassu);
 
     // --- the lines, and their glow -------------------------------------------
     vec4 li = texture(sTD2DInputs[0], uv);
     vec4 gl = texture(sTD2DInputs[1], uv);
-    col = col * (1.0 - clamp(li.a, 0.0, 1.0)) + li.rgb;
-    col += gl.rgb * uD.x;
+    li = vec4(san(li.r, 0.0, 8.0, 0.0), san(li.g, 0.0, 8.0, 0.0),
+              san(li.b, 0.0, 8.0, 0.0), san(li.a, 0.0, 1.0, 0.0));
+    gl = vec4(san(gl.r, 0.0, 8.0, 0.0), san(gl.g, 0.0, 8.0, 0.0),
+              san(gl.b, 0.0, 8.0, 0.0), 1.0);
+    col = col * (1.0 - li.a) + li.rgb;
+    col += gl.rgb * glowa;
     vec4 lb = texture(sTD2DInputs[2], uv);
-    col = mix(col, lb.rgb, clamp(lb.a, 0.0, 1.0) * uD.w);
+    col = mix(col, lb.rgb, clamp(lb.a, 0.0, 1.0) * labf);
 
     // --- grade ---------------------------------------------------------------
-    col *= uB.w;
+    col *= brite;
     col += (hash21(uv * vec2(1920.0, 1080.0) + fract(t)) - 0.5) * 0.010;
     vec2 d = (uv - 0.5) * vec2(1.777, 1.0);
-    col *= 1.0 - uB.z * 0.80 * dot(d, d);
-    fragColor = TDOutputSwizzle(vec4(max(col, vec3(0.0)), 1.0));
+    col *= 1.0 - vign * 0.80 * dot(d, d);
+    vec3 outc = max(col, vec3(0.0));
+    // >= 0.0 is false for NaN, so this catches anything the guards above missed
+    // and falls back to the sky rather than to black. A dull frame is a glitch;
+    // a black frame is the screen going out mid-set.
+    vec3 fallback = mix(SKYLOW, SKYTOP, clamp(1.0 - uv.y, 0.0, 1.0)) * 1.15;
+    if (!(outc.r >= 0.0) || !(outc.g >= 0.0) || !(outc.b >= 0.0)) {
+        outc = fallback;
+    }
+    // and a floor, because "technically finite but 2% grey" is still a dead screen
+    outc = max(outc, fallback * 0.30);
+    fragColor = TDOutputSwizzle(vec4(outc, 1.0));
 }
 ''')
 post.par.pixeldat = post_pix.path
