@@ -1,28 +1,27 @@
-# Monsoon — it is raining hard, someone is playing a harmonium in it, and everyone
-# walks past.
+# Monsoon — a harmonium on a street corner, the rain that arrives halfway through,
+# and everyone who walks past without stopping.
 #
-# A fixed camera on one street corner. The rain does not let up and he does not stop
-# playing; what changes is how many people are crossing, how hard it is coming down,
-# and how often the sky goes white. Once in a while somebody stops. That is the whole
-# story and it is told in colour: THE WORLD IS BLUE, THE AIR IS PURPLE, AND THE ONLY
-# RED IN THE FRAME IS HIM. Every figure that passes close enough picks up a red edge
-# on the side facing him and loses it again on the way out.
+# A fixed camera on one corner. The first third is dry: he is already playing, the
+# evening crowd is already going home, and the wind gets up. Then it starts, and by
+# the time the sky opens he has been out in it for two chapters and has not moved.
+#
+# DRAWN FLAT, NOT DRAWN AS WIREFRAME. Everything is a filled shape with a hard
+# shadow side and a bold outline, in the register of an animated series cel: flat
+# colour blocked in, no gradients inside a shape, one light source, strong
+# silhouettes. Every filled shape and every outline in the scene is the SAME
+# primitive — one instanced unit quad with a per-instance width — so a hairline
+# outline and a solid slab of colour cost exactly the same and come out of the same
+# pool. A convex shape is filled by horizontal slabs; a limb is a single fat quad.
+#
+# THE COLOUR IS THE STORY. The world is blue, the air is purple, and the only red in
+# the frame is him. Anyone who passes close enough picks up his lamp on the side
+# facing him and loses it again on the way out.
 #
 # BUILT FOR A SWITCH. This is one tox among sixteen, so the cost of NOT being on
-# screen mattered more than the cost of being on it:
-#   - fixed camera, so there is no world array — the scene is a few thousand line
-#     segments per frame and nothing is stored between them
-#   - six TOPs, none of them pass-through. The sky, the rain volume, the wet street,
-#     the lightning flash, the glow add, the grade and the vignette are ONE shader.
-#   - no executeDAT keep-alive. TD is pull-based; unselected, this costs one Audio
-#     Device In tick per frame and nothing else.
-# Measured against `bayou` (15 TOPs, 87.9 MB) at the bottom of the README.
-#
-# THE RAIN IS IN TWO PLACES ON PURPOSE. The volume of it — the sheets, the depth, the
-# haze — is procedural in the shader, where a million drops cost the same as one. Only
-# the near streaks that need to pass IN FRONT of people, and the splashes that have to
-# land on the actual street line, are geometry. Drawing all of it as geometry is how
-# you spend eight thousand instances on drizzle.
+# screen mattered more than the cost of being on it: fixed camera so there is no
+# world to store, six TOPs none of which is a pass-through, the volume of the rain
+# procedural in the shader rather than in the instance pool, and no executeDAT
+# keep-alive — TD is pull-based, and unselected this costs one timer CHOP.
 #
 # Idempotent: destroys and recreates /project1/monsoon and its project-level Out TOP.
 # No media files needed.
@@ -40,42 +39,56 @@ ORTHOH = ORTHOW / ASPECT
 CLOCKLEN = 60.0
 
 STORYDEF = 240.0
-MAXSEG = 2400            # instance pool; fixed, never resized. Measured peak
-                         # over a full dry-run pass is 1060, and Crowd tops out at 2x.
+MAXSEG = 3000            # instance pool; fixed, never resized
 GROUNDY = -0.260         # the wet street, in world y
 MUSX = -0.245            # where he sits
-MSCALE = 0.360
+MSCALE = 0.440
+# 1280 px across an ortho width of 2.0 is 640 px per world unit, so an outline of
+# 0.0052 is a 3.3 px line. Bold enough to read as drawn rather than as wireframe.
+LWCHAR = 0.0052          # character outlines
+LWBG = 0.0034            # background outlines
 
-# Red, blue, purple, and nothing else. Values are chosen for MEDIUM brightness: the
-# sky alone sits near 0.13 luminance, where `bayou` sat near 0.02. A scene that is
-# mostly black reads as cheap on a big screen and disappears next to fifteen others.
+# Flat, desaturated, limited — blocked in rather than lit. Each surface gets a
+# SHADOW value and a LIT value and nothing in between, which is what makes a flat
+# cel read as form instead of as a sticker.
 PAL = dict(
-    SKYTOP=(0.055, 0.062, 0.158),
-    SKYLOW=(0.190, 0.092, 0.268),
-    RAIN=(0.600, 0.700, 1.000),
-    RAINFAR=(0.360, 0.430, 0.780),
-    STREET=(0.400, 0.360, 0.640),
-    SKYLINE=(0.230, 0.200, 0.420),
-    WINDOW=(0.780, 0.480, 0.980),
-    PERSON=(0.660, 0.790, 1.000),
-    RED=(1.000, 0.270, 0.320),
-    RED2=(1.000, 0.600, 0.420),
-    PURPLE=(0.760, 0.400, 1.000),
+    SKYTOP=(0.098, 0.108, 0.208),
+    SKYLOW=(0.290, 0.180, 0.330),
+    BLDGFAR=(0.115, 0.108, 0.198),
+    BLDGDK=(0.078, 0.074, 0.150),
+    BLDGLT=(0.158, 0.140, 0.252),
+    WINDOW=(0.880, 0.430, 0.560),
+    ROAD=(0.150, 0.130, 0.230),
+    KERB=(0.245, 0.205, 0.340),
+    FOREDK=(0.052, 0.048, 0.105),
+    PERSONDK=(0.150, 0.170, 0.305),
+    PERSONLT=(0.355, 0.415, 0.660),
+    PERSONED=(0.585, 0.665, 0.930),
+    MUSDK=(0.430, 0.115, 0.180),
+    MUSLT=(0.840, 0.245, 0.265),
+    MUSED=(1.000, 0.440, 0.390),
+    HARMDK=(0.310, 0.125, 0.205),
+    HARMLT=(0.615, 0.230, 0.300),
+    LAMP=(1.000, 0.490, 0.360),
+    LAMPCORE=(1.000, 0.790, 0.570),
+    RAIN=(0.620, 0.720, 1.000),
+    RAINFAR=(0.380, 0.450, 0.760),
+    PURPLE=(0.720, 0.390, 0.960),
     FLASH=(0.780, 0.730, 1.000),
 )
 
-# Eight chapters. None of them is an empty stage: the switch can land on this scene
-# at any moment of a set, so every chapter is already raining and he is already
-# playing. The arc moves how hard, how many, and how often the sky opens.
+# Eight chapters, and the weather is now a real arc rather than a level: three dry
+# chapters with a rising wind, rain from 4, and the sky only opens at 6. Everything
+# before that is a man playing to people who are walking home.
 CHECKPOINTS = [
-    ('drizzle', ' 1 - First Drops',    0.000),
-    ('settle',  ' 2 - It Sets In',     0.120),
-    ('crowd',   ' 3 - The Crowd',      0.260),
-    ('storm',   ' 4 - Thunder',        0.420),
-    ('break',   ' 5 - The Downpour',   0.560),
-    ('listen',  ' 6 - Someone Stops',  0.680),
-    ('alone',   ' 7 - Alone, Playing', 0.800),
-    ('easing',  ' 8 - It Eases',       0.920),
+    ('street',  ' 1 - The Street',        0.000),
+    ('evening', ' 2 - Evening Crowd',     0.135),
+    ('wind',    ' 3 - The Wind Gets Up',  0.270),
+    ('first',   ' 4 - It Starts to Rain', 0.400),
+    ('steady',  ' 5 - Steady Rain',       0.530),
+    ('thunder', ' 6 - Thunder',           0.660),
+    ('listen',  ' 7 - Someone Stops',     0.800),
+    ('easing',  ' 8 - It Eases',          0.910),
 ]
 
 proj = op('/project1')
@@ -159,14 +172,15 @@ for nm, label, val, lo, hi in [
     ('Timeoffset', 'Time Offset (s)',     0.0, -600.0, 3000.0),
     ('Brightness', 'Brightness',          1.0, 0.2, 2.0),
     ('Rain',       'Rain',                1.0, 0.0, 2.0),
+    ('Rainaudio',  'Rain rides Audio',    1.0, 0.0, 3.0),
     ('Wind',       'Wind',                1.0, -2.0, 3.0),
     ('Crowd',      'Crowd',               1.0, 0.0, 2.0),
     ('Thunder',    'Thunder',             1.0, 0.0, 2.0),
     ('Drone',      'Harmonium Drone',     1.0, 0.0, 2.0),
     ('Lamp',       'His Lamp',            1.0, 0.0, 2.0),
     ('Reflect',    'Wet Street',          1.0, 0.0, 2.0),
-    ('Linewidth',  'Line Width (px)',     1.45, 0.6, 5.0),
-    ('Ink',        'Line Brightness',     1.15, 0.0, 3.0),
+    ('Linewidth',  'Outline Weight',      1.0, 0.2, 3.0),
+    ('Ink',        'Brightness of Art',   1.05, 0.0, 3.0),
     ('Glow',       'Glow',                1.0, 0.0, 3.0),
     ('Label',      'Chapter Readout',     1.0, 0.0, 2.0),
     ('Vignette',   'Vignette',            0.70, 0.0, 2.0),
@@ -183,8 +197,9 @@ for _mn, _ml, _lo, _hi in (('Bpm', 'Detected BPM', 0.0, 200.0),
                            ('Flash', 'Lightning', 0.0, 1.0),
                            ('Afterglow', 'Afterglow', 0.0, 1.0),
                            ('Rainnow', 'Rain Level', 0.0, 1.0),
+                           ('Windnow', 'Wind Level', 0.0, 2.0),
                            ('Walkers', 'People On Screen', 0.0, 16.0),
-                           ('Segs', 'Lines Drawn', 0.0, float(MAXSEG)),
+                           ('Segs', 'Quads Drawn', 0.0, float(MAXSEG)),
                            ('Labelfade', 'Readout Fade', 0.0, 1.0),
                            ('Bassm', 'Bass Level', 0.0, 1.0),
                            ('Highm', 'High Level', 0.0, 1.0),
@@ -616,23 +631,29 @@ def D(ch):
 
 
 # ---------------------------------------------------------------------------
-# THE ENGINE — the street, the rain that is geometry, and the man playing
+
+# ---------------------------------------------------------------------------
+# THE ENGINE — the street, the drizzle, and the man playing through it
 # ---------------------------------------------------------------------------
 ENGINE_BODY = r'''# One fixed camera on one corner, so there is no world to store and no camera to
-# track. Everything here is emitted per frame as line segments in world coordinates
-# and handed to a single instanced unit segment.
+# track. Everything is emitted per frame as ONE primitive: a rotated, filled quad,
+# instanced from a unit square with a per-instance width.
 #
-# WHAT IS GEOMETRY AND WHAT IS NOT. The volume of the rain — the sheets, the depth,
-# the haze on the street — is in the shader, where a million drops cost what one
-# costs. Geometry is only what has to interact: the near streaks that pass IN FRONT
-# of people, and the splashes that must land on the actual street line. Drawing the
-# whole downpour as instances is how you spend an eight-thousand instance pool on
-# drizzle and still have it look thin.
+# THAT SINGLE PRIMITIVE IS THE WHOLE DRAWING SYSTEM, and it is why the flat style
+# costs nothing extra over the wireframe it replaced:
+#   an OUTLINE  is a quad 3 px wide along the edge
+#   a LIMB      is one fat quad from joint to joint
+#   a FILL      is a stack of horizontal quads scanned across a convex outline
+#   a WINDOW    is one quad
+# A hairline and a solid block of colour are the same instance out of the same pool,
+# so blocking in flat colour did not cost a second render pass, a second material,
+# or a triangulator.
 #
-# THE COLOUR IS THE STORY. Everything is blue; the air is purple; he is the only red
-# thing in the frame. Anyone who passes close enough picks up his lamp on the side
-# facing him, and loses it again on the way out. That is one line of code and it is
-# the entire point of the piece.
+# WHAT IS GEOMETRY AND WHAT IS NOT. The volume of the rain — the sheets, the haze,
+# the wet sheen on the road — is in the shader, where a million drops cost what one
+# costs. Geometry is only the near streaks that must fall IN FRONT of people and the
+# splashes that land on the actual street line. It is a drizzle for most of the
+# piece, so there are 150 of them and not thousands.
 import math
 import random
 import numpy as np
@@ -646,241 +667,69 @@ def _ss(a, b, x):
     return t * t * (3.0 - 2.0 * t)
 
 
-def _L(out, x0, y0, x1, y1, col, a, z=0.0, fl=0.0):
-    out.append((x0, y0, x1, y1, col[0], col[1], col[2], a, z, fl))
+# --- the one primitive, and the three things built out of it ---------------------
+def _seg(out, x0, y0, x1, y1, col, a, z=0.0, w=LWCHAR, fl=0.0):
+    out.append((x0, y0, x1, y1, col[0], col[1], col[2], a, z, fl, w))
 
 
-def _P(out, pts, col, a, z=0.0, fl=0.0):
-    for i in range(len(pts) - 1):
-        out.append((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1],
-                    col[0], col[1], col[2], a, z, fl))
+def _path(out, pts, col, a, z=0.0, w=LWCHAR, fl=0.0, close=False):
+    n = len(pts)
+    rng = range(n) if close else range(n - 1)
+    for i in rng:
+        p, q = pts[i], pts[(i + 1) % n]
+        out.append((p[0], p[1], q[0], q[1], col[0], col[1], col[2], a, z, fl, w))
 
 
-def _NG(out, cx, cy, r, n, rot, col, a, z=0.0, fl=0.0, ry=None):
+def _rect(out, cx, cy, w, h, col, a, z=0.0, fl=0.0):
+    """An axis-aligned filled rectangle: one instance, no scanning needed."""
+    out.append((cx, cy - h * 0.5, cx, cy + h * 0.5,
+                col[0], col[1], col[2], a, z, fl, w))
+
+
+def _fill(out, pts, col, a, z=0.0, fl=0.0, slabs=0):
+    """Fill a CONVEX polygon with horizontal slabs.
+
+    Each slab is one quad lying on its side, so an arbitrary flat shape costs a
+    handful of instances and needs no triangulation. Slabs overlap by 6% because
+    at a slab height of two pixels a seam is a visible stripe through the shape.
+    """
+    ys = [p[1] for p in pts]
+    lo, hi = min(ys), max(ys)
+    hgt = hi - lo
+    if hgt < 1e-5:
+        return
+    n = slabs if slabs else max(3, min(16, int(hgt / 0.014) + 2))
+    dh = hgt / n
+    m = len(pts)
+    for k in range(n):
+        yc = lo + dh * (k + 0.5)
+        xa, xb = 1e9, -1e9
+        for i in range(m):
+            ax, ay = pts[i]
+            bx, by = pts[(i + 1) % m]
+            if (ay <= yc < by) or (by <= yc < ay):
+                xx = ax + (bx - ax) * (yc - ay) / (by - ay)
+                if xx < xa:
+                    xa = xx
+                if xx > xb:
+                    xb = xx
+        if xb - xa < 1e-5:
+            continue
+        out.append((xa, yc, xb, yc, col[0], col[1], col[2], a, z, fl, dh * 1.06))
+
+
+def _ngon(out, cx, cy, r, n, rot, col, a, z=0.0, w=LWCHAR, fl=0.0, ry=None):
     ry = r if ry is None else ry
     pts = [(cx + r * math.cos(rot + i * 2.0 * math.pi / n),
-            cy + ry * math.sin(rot + i * 2.0 * math.pi / n)) for i in range(n + 1)]
-    _P(out, pts, col, a, z, fl)
+            cy + ry * math.sin(rot + i * 2.0 * math.pi / n)) for i in range(n)]
+    _path(out, pts, col, a, z, w, fl, close=True)
+    return pts
 
 
 def _mix(c1, c2, k):
     k = 0.0 if k < 0.0 else (1.0 if k > 1.0 else k)
     return (c1[0] + (c2[0] - c1[0]) * k, c1[1] + (c2[1] - c1[1]) * k,
             c1[2] + (c2[2] - c1[2]) * k)
-
-
-def _ik(out, hx, hy, fx, fy, l1, l2, sgn, col, a, z=0.0):
-    dx, dy = fx - hx, fy - hy
-    raw = max(math.hypot(dx, dy), 1e-6)
-    ux, uy = dx / raw, dy / raw
-    d = min(max(raw, 0.010), l1 + l2 - 0.002)
-    fx, fy = hx + ux * d, hy + uy * d
-    aa = (l1 * l1 - l2 * l2 + d * d) / (2.0 * d)
-    hh = math.sqrt(max(0.0, l1 * l1 - aa * aa))
-    kx = hx + ux * aa - uy * hh * sgn
-    ky = hy + uy * aa + ux * hh * sgn
-    _L(out, hx, hy, kx, ky, col, a, z)
-    _L(out, kx, ky, fx, fy, col, a, z)
-    return fx, fy
-
-
-def _rh(i):
-    x = math.sin(i * 12.9898 + 78.233) * 43758.5453
-    return x - math.floor(x)
-
-
-# --- the city behind it all ------------------------------------------------------
-# Static, generated once per seed into flat numpy arrays. About 250 segments and
-# 25 KB, which is the whole argument for algorithmic scenery: this backdrop costs
-# less than one four-hundredth of a single 1280x720 texture.
-def _gen_static(rs):
-    groups = []                      # (segs, colour, alpha, z, storm_lift)
-    sky, lit = [], []
-    x = -1.30
-    while x < 1.32:
-        w = rs.uniform(0.11, 0.29)
-        h = rs.uniform(0.15, 0.44)
-        b, top = SKYBASE, SKYBASE + h
-        sky.append((x, b, x, top))
-        sky.append((x, top, x + w, top))
-        sky.append((x + w, top, x + w, b))
-        if rs.random() < 0.35:                       # a water tank or an aerial
-            ax = x + w * rs.uniform(0.25, 0.75)
-            sky.append((ax, top, ax, top + rs.uniform(0.03, 0.09)))
-        cols = max(1, int(w / 0.058))
-        rows = max(1, int(h / 0.068))
-        for ci in range(cols):
-            for ri in range(rows):
-                if rs.random() > 0.26:
-                    continue
-                wx = x + 0.020 + ci * 0.058
-                wy = b + 0.030 + ri * 0.068
-                ww, wh = 0.021, 0.031
-                if wx + ww > x + w - 0.012 or wy + wh > top - 0.014:
-                    continue
-                lit.append((wx, wy, wx + ww, wy))
-                lit.append((wx + ww, wy, wx + ww, wy + wh))
-                lit.append((wx + ww, wy + wh, wx, wy + wh))
-                lit.append((wx, wy + wh, wx, wy))
-        x += w + rs.uniform(0.005, 0.045)
-    groups.append((sky, SKYLINE, 0.62, -0.50, 2.6))
-    groups.append((lit, WINDOW, 0.46, -0.49, 1.2))
-
-    road, kerb = [], []
-    for gy in (GROUNDY, GROUNDY + 0.030, GROUNDY + 0.085):
-        road.append((-1.30, gy, 1.30, gy))
-    road.append((-1.30, GROUNDY + 0.140, 1.30, GROUNDY + 0.140))
-    for i in range(18):
-        rx = -1.26 + i * 0.148
-        kerb.append((rx, GROUNDY + 0.085, rx, GROUNDY + 0.148))
-    for i in range(26):
-        rx = -1.28 + i * 0.100
-        kerb.append((rx, GROUNDY, rx - 0.030, GROUNDY - 0.026))
-    groups.append((road, STREET, 0.78, -0.20, 1.5))
-    groups.append((kerb, STREET, 0.42, -0.21, 1.5))
-
-    posts = []
-    for px in (-0.86, 0.94):
-        posts.append((px, GROUNDY + 0.030, px, GROUNDY + 0.560))
-        posts.append((px, GROUNDY + 0.560, px + 0.085, GROUNDY + 0.585))
-        for i in range(5):
-            a = math.radians(200.0 + i * 34.0)
-            posts.append((px + 0.085, GROUNDY + 0.585,
-                          px + 0.085 + 0.046 * math.cos(a),
-                          GROUNDY + 0.585 + 0.046 * math.sin(a)))
-    groups.append((posts, SKYLINE, 0.70, -0.30, 1.8))
-
-    X0, Y0, X1, Y1, R, G, B, A, Z, LF = ([] for _ in range(10))
-    for segs, col, al, z, lift in groups:
-        for (a0, b0, a1, b1) in segs:
-            X0.append(a0); Y0.append(b0); X1.append(a1); Y1.append(b1)
-            R.append(col[0]); G.append(col[1]); B.append(col[2])
-            A.append(al); Z.append(z); LF.append(lift)
-    f = lambda L: np.array(L, dtype=np.float64)
-    return dict(x0=f(X0), y0=f(Y0), x1=f(X1), y1=f(Y1), r=f(R), g=f(G), b=f(B),
-                a=f(A), z=f(Z), lift=f(LF), n=len(X0))
-
-
-# --- the man, and what he is playing --------------------------------------------
-# A harmonium is a box you pump with one hand and play with the other, sitting on
-# the ground. The pump is the animation: it is the only thing in the frame moving
-# in musical time rather than in weather time, which is what makes him read as a
-# person doing something rather than as scenery that happens to be person-shaped.
-def _musician(out, ox, oy, sc, pump, press, ink, lamp, kickenv, high, t, flash):
-    def T(x, y):
-        return (ox + x * sc, oy + y * sc)
-
-    RED_ = RED
-    RED2_ = RED2
-    body = _mix(RED_, RED2_, 0.25 + 0.35 * kickenv)
-    box = _mix(RED_, RED2_, 0.55)
-
-    # --- the harmonium: a front face and a top face, drawn as one solid -----------
-    fl_, fr_, fb_, ft_ = 0.10, 0.52, 0.02, 0.20
-    dx_, dy_ = 0.072, 0.052
-    _P(out, [T(fl_, fb_), T(fr_, fb_), T(fr_, ft_), T(fl_, ft_), T(fl_, fb_)],
-       box, ink)
-    _P(out, [T(fl_, ft_), T(fl_ + dx_, ft_ + dy_), T(fr_ + dx_, ft_ + dy_),
-             T(fr_, ft_)], box, ink)
-    _L(out, *(T(fr_ + dx_, ft_ + dy_) + T(fr_ + dx_, fb_ + dy_ * 0.35)), box,
-       ink * 0.55)
-    for k in (0.33, 0.66):
-        _L(out, *(T(fl_ + (fr_ - fl_) * k, fb_) + T(fl_ + (fr_ - fl_) * k, ft_)),
-           box, ink * 0.30)
-
-    # the keyboard, on the front edge of the top face. One key is down at a time.
-    NK = 11
-    for i in range(NK):
-        u = i / float(NK)
-        kx = fl_ + 0.022 + u * (fr_ - fl_ - 0.044)
-        dn = 0.011 if i == press else 0.0
-        _P(out, [T(kx, ft_ - dn), T(kx + dx_ * 0.62, ft_ + dy_ * 0.62 - dn)],
-           box, ink * (1.25 if i == press else 0.62))
-        if i % 7 in (1, 3, 5):
-            _P(out, [T(kx + 0.008, ft_ + dy_ * 0.20),
-                     T(kx + 0.008 + dx_ * 0.34, ft_ + dy_ * 0.54)],
-               box, ink * 0.40)
-
-    # --- the bellows. Hinged at the back, and the pleats really compress ---------
-    hx_, hy_ = fr_ + dx_ * 0.55, ft_ + dy_ * 0.72
-    ang = 0.24 + 0.46 * pump
-    tipx, tipy = hx_ + 0.155 * math.cos(ang), hy_ + 0.155 * math.sin(ang)
-    _P(out, [T(hx_, hy_), T(tipx, tipy)], box, ink)
-    _P(out, [T(tipx, tipy), T(tipx - 0.035, tipy - 0.070), T(hx_ - 0.020, hy_)],
-       box, ink * 0.85)
-    bx0, by0 = fr_ - 0.03, ft_ + dy_ * 0.34
-    bx1e = fr_ + dx_ * 0.92
-    for i in range(1, 5):
-        u = i / 5.0
-        ax_ = hx_ + (tipx - hx_) * u
-        ay_ = hy_ + (tipy - hy_) * u
-        bx_ = bx0 + (bx1e - bx0) * u
-        bulge = 0.026 * (1.0 - 0.70 * pump) * math.sin(math.pi * u)
-        _P(out, [T(ax_, ay_),
-                 T((ax_ + bx_) * 0.5 + bulge, (ay_ + by0) * 0.5 - bulge * 0.4),
-                 T(bx_, by0)], box, ink * 0.50)
-    _P(out, [T(bx0, by0), T(bx1e, by0)], box, ink * 0.55)
-
-    # --- the open case in front of him ------------------------------------------
-    _P(out, [T(-0.46, 0.02), T(-0.46, 0.085), T(-0.21, 0.085), T(-0.21, 0.02),
-             T(-0.46, 0.02)], box, ink * 0.70)
-    _P(out, [T(-0.46, 0.085), T(-0.52, 0.155)], box, ink * 0.50)
-
-    # --- the lamp: the one red source, and the reason anyone is lit at all -------
-    lx_, ly_ = 0.80, 0.14
-    la = ink * lamp * (0.85 + 0.35 * math.sin(t * 5.3) * 0.3 + 0.30 * kickenv)
-    _NG(out, *(T(lx_, ly_)), 0.062 * sc, 6, 0.26, RED_, la)
-    _NG(out, *(T(lx_, ly_)), 0.026 * sc, 4, 0.0, RED2_, la * 1.5)
-    _L(out, *(T(lx_, ly_ + 0.062) + T(lx_, ly_ + 0.125)), RED_, la * 0.6)
-    _P(out, [T(lx_ - 0.05, 0.02), T(lx_, ly_ - 0.062), T(lx_ + 0.05, 0.02)],
-       RED_, la * 0.5)
-    for i in range(8):
-        a = i * math.pi / 4.0 + t * 0.25
-        r0, r1 = 0.085, 0.085 + 0.055 * (0.5 + 0.5 * math.sin(t * 2.1 + i))
-        _L(out, *(T(lx_ + r0 * math.cos(a), ly_ + r0 * math.sin(a))
-                  + T(lx_ + r1 * math.cos(a), ly_ + r1 * math.sin(a))),
-           RED2_, la * 0.40)
-
-    # --- the player -------------------------------------------------------------
-    rock = (pump - 0.5) * 0.055
-    hipx, hipy = -0.10, 0.17
-    shx, shy = 0.02 + rock, 0.51 - abs(rock) * 0.5
-    _P(out, [T(-0.36, 0.02), T(0.11, 0.02), T(-0.10, 0.19), T(-0.36, 0.02)],
-       body, ink)
-    _P(out, [T(-0.22, 0.02), T(-0.11, 0.12)], body, ink * 0.55)
-    _P(out, [T(hipx - 0.105, hipy), T(shx - 0.095, shy), T(shx + 0.095, shy),
-             T(hipx + 0.105, hipy)], body, ink)
-    for k in (0.35, 0.68):
-        _L(out, *(T(hipx - 0.105 + (shx - 0.095 - hipx + 0.105) * k,
-                    hipy + (shy - hipy) * k)
-                  + T(hipx + 0.105 + (shx + 0.095 - hipx - 0.105) * k,
-                      hipy + (shy - hipy) * k)), body, ink * 0.28)
-    hdx, hdy = shx + 0.030, shy + 0.115
-    _NG(out, *(T(hdx, hdy)), 0.088 * sc, 7, 0.30, body, ink, ry=0.098 * sc)
-    _P(out, [T(hdx - 0.075, hdy + 0.045), T(hdx + 0.010, hdy + 0.100),
-             T(hdx + 0.080, hdy + 0.030)], body, ink * 0.75)
-    _L(out, *(T(shx, shy) + T(hdx - 0.020, hdy - 0.085)), body, ink * 0.6)
-
-    # right hand on the keys, left hand over the top on the bellows
-    kpx = fl_ + 0.022 + (press / float(NK)) * (fr_ - fl_ - 0.044) + dx_ * 0.45
-    _ik(out, *(T(shx + 0.075, shy - 0.030) + T(kpx, ft_ + dy_ * 0.55)),
-        0.20 * sc, 0.19 * sc, -1.0, body, ink)
-    _ik(out, *(T(shx + 0.020, shy - 0.020) + T(tipx - 0.025, tipy - 0.030)),
-        0.24 * sc, 0.25 * sc, -1.0, body, ink * 0.55)
-
-    # rain landing on him: four sites, blinking on their own phases
-    for i in range(4):
-        u = (t * (1.6 + 0.7 * i) + _rh(i * 7 + 3)) % 1.0
-        if u > 0.28:
-            continue
-        age = u / 0.28
-        sx_ = hdx - 0.10 + 0.075 * i
-        sy_ = hdy + 0.075 - 0.055 * (i % 2)
-        rr = 0.020 + 0.055 * age
-        aa = ink * (1.0 - age) * (0.55 + 0.9 * high)
-        _L(out, *(T(sx_ - rr, sy_ + rr * 0.6) + T(sx_, sy_)), RAIN, aa)
-        _L(out, *(T(sx_, sy_) + T(sx_ + rr, sy_ + rr * 0.6)), RAIN, aa)
-    return T(0.36, ft_ + dy_), T(lx_, ly_)
 
 
 def _knee(hx, hy, fx, fy, l1, l2, sgn):
@@ -894,19 +743,227 @@ def _knee(hx, hy, fx, fy, l1, l2, sgn):
     return (hx + ux * aa - uy * hh * sgn, hy + uy * aa + ux * hh * sgn, fx, fy)
 
 
+def _rh(i):
+    x = math.sin(i * 12.9898 + 78.233) * 43758.5453
+    return x - math.floor(x)
+
+
+# --- the city, blocked in flat ---------------------------------------------------
+# A building is ONE filled quad plus its windows. Static, generated once per seed:
+# 12 blocks and their windows come to under 40 KB, which is the whole argument for
+# algorithmic scenery — this backdrop costs a two-hundredth of one 1280x720 texture.
+def _gen_static(rs):
+    rows = []      # x0,y0,x1,y1,r,g,b,a,z,w,kind   kind 1 = window (flickers)
+    def block(x0, y0, x1, y1, col, al, z, kind=0):
+        rows.append((x0, (y0 + y1) * 0.5, x1, (y0 + y1) * 0.5,
+                     col[0], col[1], col[2], al, z, abs(y1 - y0), kind))
+
+    # three receding ranks, darkest at the back so the skyline reads as depth
+    for rank, (base, tone, zz, hmul) in enumerate((
+            (SKYBASE + 0.050, BLDGFAR, -0.62, 1.00),
+            (SKYBASE + 0.012, BLDGDK, -0.56, 0.86),
+            (SKYBASE - 0.010, BLDGLT, -0.50, 0.66))):
+        x = -1.34 - rs.uniform(0.0, 0.14)
+        while x < 1.34:
+            w = rs.uniform(0.13, 0.32)
+            h = rs.uniform(0.16, 0.46) * hmul
+            block(x, base, x + w, base + h, tone, 1.0, zz)
+            if rank == 2 and rs.random() < 0.40:           # a tank or a stack
+                ax = x + w * rs.uniform(0.2, 0.7)
+                block(ax, base + h, ax + 0.035, base + h + rs.uniform(0.03, 0.08),
+                      tone, 1.0, zz)
+            if rank >= 1:
+                cols = max(1, int(w / 0.062))
+                rws = max(1, int(h / 0.072))
+                for ci in range(cols):
+                    for ri in range(rws):
+                        if rs.random() > (0.30 if rank == 2 else 0.18):
+                            continue
+                        wx = x + 0.020 + ci * 0.062
+                        wy = base + 0.030 + ri * 0.072
+                        if wx + 0.024 > x + w - 0.012 or wy + 0.032 > base + h - 0.016:
+                            continue
+                        block(wx, wy, wx + 0.024, wy + 0.032, WINDOW,
+                              rs.uniform(0.55, 1.0), zz + 0.01, kind=1)
+            x += w + rs.uniform(0.004, 0.030)
+
+    # the far pavement and the kerb: two flat bands, and the only edge the figures
+    # are allowed to stand on
+    block(-1.34, GROUNDY + 0.082, 1.34, GROUNDY + 0.155, BLDGDK, 1.0, -0.44)
+    block(-1.34, GROUNDY + 0.074, 1.34, GROUNDY + 0.092, KERB, 0.85, -0.42)
+    block(-1.34, GROUNDY - 0.004, 1.34, GROUNDY + 0.006, KERB, 0.55, -0.24)
+
+    X0, Y0, X1, Y1, R, G, B, A, Z, WD, K = ([] for _ in range(11))
+    for (a0, b0, a1, b1, r_, g_, b2, al, z, wd, kind) in rows:
+        X0.append(a0); Y0.append(b0); X1.append(a1); Y1.append(b1)
+        R.append(r_); G.append(g_); B.append(b2)
+        A.append(al); Z.append(z); WD.append(wd); K.append(kind)
+    f = lambda L: np.array(L, dtype=np.float64)
+    return dict(x0=f(X0), y0=f(Y0), x1=f(X1), y1=f(Y1), r=f(R), g=f(G), b=f(B),
+                a=f(A), z=f(Z), w=f(WD), kind=f(K), n=len(X0),
+                fph=f([rs.uniform(0.0, 6.283) for _ in X0]))
+
+
+# --- the two lampposts that frame the shot ---------------------------------------
+def _posts(out, ink, flash):
+    col = _mix(FOREDK, FLASH, 0.35 * flash)
+    for px, sc in ((-1.02, 1.0), (1.06, 0.92)):
+        _seg(out, px, GROUNDY - 0.02, px, GROUNDY + 0.60 * sc, col, ink,
+             0.42, 0.020)
+        _seg(out, px, GROUNDY + 0.60 * sc, px + 0.10, GROUNDY + 0.625 * sc,
+             col, ink, 0.42, 0.014)
+        _fill(out, [(px + 0.075, GROUNDY + 0.612 * sc),
+                    (px + 0.145, GROUNDY + 0.640 * sc),
+                    (px + 0.165, GROUNDY + 0.596 * sc),
+                    (px + 0.090, GROUNDY + 0.574 * sc)], col, ink, 0.42)
+
+
+# --- the man, blocked in flat ----------------------------------------------------
+# One light source: his own lamp, on his right. So every shape gets a LIT value on
+# the lamp side and a SHADOW value on the other, with a hard edge between them and
+# nothing in between. That hard edge is the whole difference between a flat cel and
+# a coloured-in wireframe.
+def _musician(out, ox, oy, sc, pump, press, ink, lamp, kickenv, high, t, flash):
+    def T(x, y):
+        return (ox + x * sc, oy + y * sc)
+
+    LWC = LWCHAR * LINEW
+    lt, dk, ed = MUSLT, MUSDK, MUSED
+    hlt, hdk = HARMLT, HARMDK
+    z = 0.06
+
+    # --- the harmonium: a front face, a top face, and a keyboard ----------------
+    fl_, fr_, fb_, ft_ = 0.10, 0.52, 0.02, 0.20
+    dx_, dy_ = 0.072, 0.052
+    _fill(out, [T(fl_, fb_), T(fr_, fb_), T(fr_, ft_), T(fl_, ft_)], hdk, ink, z)
+    _fill(out, [T(fl_, ft_), T(fl_ + dx_, ft_ + dy_), T(fr_ + dx_, ft_ + dy_),
+                T(fr_, ft_)], hlt, ink, z + 0.004)
+    _path(out, [T(fl_, fb_), T(fr_, fb_), T(fr_, ft_), T(fl_, ft_)], ed,
+          ink * 0.85, z + 0.02, LWC, close=True)
+    _path(out, [T(fl_, ft_), T(fl_ + dx_, ft_ + dy_), T(fr_ + dx_, ft_ + dy_),
+                T(fr_, ft_)], ed, ink * 0.85, z + 0.02, LWC, close=True)
+
+    NK = 11
+    for i in range(NK):
+        u = i / float(NK)
+        kx = fl_ + 0.022 + u * (fr_ - fl_ - 0.044)
+        dn = 0.010 if i == press else 0.0
+        kc = LAMPCORE if i == press else _mix(hlt, (1.0, 1.0, 1.0), 0.45)
+        _fill(out, [T(kx, ft_ - dn), T(kx + 0.020, ft_ - dn),
+                    T(kx + 0.020 + dx_ * 0.62, ft_ + dy_ * 0.62 - dn),
+                    T(kx + dx_ * 0.62, ft_ + dy_ * 0.62 - dn)],
+              kc, ink * (1.15 if i == press else 0.80), z + 0.008, slabs=3)
+
+    # --- the bellows: a hinged flap, and the pleats really compress -------------
+    hx_, hy_ = fr_ + dx_ * 0.55, ft_ + dy_ * 0.72
+    ang = 0.24 + 0.46 * pump
+    tipx, tipy = hx_ + 0.108 * math.cos(ang), hy_ + 0.108 * math.sin(ang)
+    bx0, by0 = fr_ - 0.03, ft_ + dy_ * 0.34
+    bx1e = fr_ + dx_ * 0.92
+    _fill(out, [T(hx_, hy_), T(tipx, tipy), T(tipx - 0.030, tipy - 0.062),
+                T(bx1e, by0), T(bx0, by0)], hlt, ink, z + 0.002)
+    for i in range(1, 5):
+        u = i / 5.0
+        ax_ = hx_ + (tipx - hx_) * u
+        ay_ = hy_ + (tipy - hy_) * u
+        bxx = bx0 + (bx1e - bx0) * u
+        bulge = 0.026 * (1.0 - 0.70 * pump) * math.sin(math.pi * u)
+        _path(out, [T(ax_, ay_),
+                    T((ax_ + bxx) * 0.5 + bulge, (ay_ + by0) * 0.5 - bulge * 0.4),
+                    T(bxx, by0)], ed, ink * 0.55, z + 0.02, LWC * 0.8)
+    _path(out, [T(hx_, hy_), T(tipx, tipy), T(tipx - 0.030, tipy - 0.062),
+                T(bx1e, by0)], ed, ink * 0.9, z + 0.02, LWC)
+
+    # --- the open case --------------------------------------------------------
+    _fill(out, [T(-0.46, 0.02), T(-0.21, 0.02), T(-0.21, 0.085), T(-0.46, 0.085)],
+          hdk, ink, z)
+    _path(out, [T(-0.46, 0.02), T(-0.21, 0.02), T(-0.21, 0.085), T(-0.46, 0.085)],
+          ed, ink * 0.8, z + 0.02, LWC, close=True)
+    _path(out, [T(-0.46, 0.085), T(-0.52, 0.155)], ed, ink * 0.7, z + 0.02, LWC)
+
+    # --- the player -----------------------------------------------------------
+    rock = (pump - 0.5) * 0.055 + kickenv * 0.008
+    hipx, hipy = -0.10, 0.17
+    shx, shy = 0.02 + rock, 0.51 - abs(rock) * 0.5
+    legs = [T(-0.36, 0.02), T(0.11, 0.02), T(-0.09, 0.195)]
+    _fill(out, legs, dk, ink, z + 0.03)
+    _path(out, legs, ed, ink * 0.9, z + 0.05, LWC, close=True)
+    torso = [T(hipx - 0.105, hipy), T(hipx + 0.105, hipy),
+             T(shx + 0.095, shy), T(shx - 0.095, shy)]
+    _fill(out, torso, dk, ink, z + 0.03)
+    # the lamp side, hard-edged: the right third of the torso only
+    _fill(out, [T(hipx + 0.020, hipy), T(hipx + 0.105, hipy),
+                T(shx + 0.095, shy), T(shx + 0.018, shy)], lt, ink, z + 0.035)
+    _path(out, torso, ed, ink * 0.95, z + 0.05, LWC, close=True)
+
+    hdx, hdy = shx + 0.030, shy + 0.115
+    head = [T(hdx + 0.106 * math.cos(a), hdy + 0.118 * math.sin(a))
+            for a in [i * 2.0 * math.pi / 7.0 for i in range(7)]]
+    _fill(out, head, dk, ink, z + 0.03)
+    _fill(out, [T(hdx + 0.012, hdy - 0.114), T(hdx + 0.106, hdy - 0.046),
+                T(hdx + 0.100, hdy + 0.072), T(hdx + 0.024, hdy + 0.114)],
+          lt, ink, z + 0.035)
+    _path(out, head, ed, ink, z + 0.05, LWC, close=True)
+    _seg(out, *(T(shx, shy) + T(hdx - 0.020, hdy - 0.085)), dk, ink, z + 0.02,
+         0.052 * sc)
+
+    # arms: one fat quad per bone, which is what a flat cel limb is
+    kpx = fl_ + 0.022 + (press / float(NK)) * (fr_ - fl_ - 0.044) + dx_ * 0.45
+    for (sx0, sy0, tx0, ty0, cc, aa) in (
+            (shx + 0.075, shy - 0.030, kpx, ft_ + dy_ * 0.55, lt, 1.0),
+            (shx + 0.020, shy - 0.020, hx_ - 0.010, hy_ + 0.030, dk, 0.62)):
+        ekx, eky, fxx, fyy = _knee(sx0, sy0, tx0, ty0, 0.22, 0.21, -1.0)
+        wmul = 1.0 if aa > 0.8 else 0.72
+        _seg(out, *(T(sx0, sy0) + T(ekx, eky)), cc, ink * aa, z + 0.04,
+             0.056 * sc * wmul)
+        _seg(out, *(T(ekx, eky) + T(fxx, fyy)), cc, ink * aa, z + 0.04,
+             0.046 * sc * wmul)
+
+    # --- the lamp: the only light source in the scene --------------------------
+    lx_, ly_ = 0.80, 0.14
+    la = ink * lamp * (0.88 + 0.22 * math.sin(t * 5.3) + 0.24 * kickenv)
+    _fill(out, [T(lx_ - 0.05, 0.02), T(lx_ + 0.05, 0.02), T(lx_ + 0.02, ly_ - 0.05),
+                T(lx_ - 0.02, ly_ - 0.05)], hdk, ink, z)
+    lamp_pts = [(T(lx_ + 0.062 * math.cos(a), ly_ + 0.062 * math.sin(a)))
+                for a in [i * math.pi / 3.0 + 0.26 for i in range(6)]]
+    _fill(out, lamp_pts, LAMP, la, z + 0.03)
+    _fill(out, [T(lx_ + 0.026 * math.cos(a), ly_ + 0.026 * math.sin(a))
+                for a in [i * math.pi / 2.0 for i in range(4)]],
+          LAMPCORE, la * 1.25, z + 0.04, slabs=4)
+    _path(out, lamp_pts, ed, ink * 0.9, z + 0.05, LWC, close=True)
+    _seg(out, *(T(lx_, ly_ + 0.062) + T(lx_, ly_ + 0.125)), ed, ink * 0.7,
+         z + 0.02, LWC)
+    for i in range(6):
+        a = i * math.pi / 3.0 + t * 0.22
+        r0, r1 = 0.088, 0.088 + 0.052 * (0.5 + 0.5 * math.sin(t * 2.1 + i))
+        _seg(out, *(T(lx_ + r0 * math.cos(a), ly_ + r0 * math.sin(a))
+                    + T(lx_ + r1 * math.cos(a), ly_ + r1 * math.sin(a))),
+             LAMP, la * 0.45, z + 0.01, LWC * 0.8)
+    return T(0.36, ft_ + dy_), T(lx_, ly_)
+
+
 # --- someone walking past --------------------------------------------------------
-# Built once in local coordinates facing +x, then mirrored through T. Doing the
-# mirror in the transform rather than in the pose is what keeps the knee bending
-# forwards in both directions — solve the IK in world space with a mirrored frame
-# and every figure walking left has its legs on backwards.
-def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped):
+# Built once in local coordinates facing +x and mirrored through T. Doing the mirror
+# in the transform rather than in the pose is what keeps the knee bending forwards in
+# both directions — solve the pose in world space with a mirrored frame and every
+# figure walking left has its legs on backwards.
+def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped,
+            rain, flash):
     def T(lx, ly):
         return (px + facing * lx * sc, gy + ly * sc)
 
-    col = _mix(PERSON, RED2, redk)
+    LWC = LWCHAR * LINEW
     a = al * ink
+    dk = _mix(PERSONDK, LAMP, redk * 0.55)
+    lt = _mix(PERSONLT, LAMP, redk)
+    ed = _mix(PERSONED, LAMPCORE, redk)
+    if flash > 0.02:            # the strike silhouettes everyone against the sky
+        dk = _mix(dk, FOREDK, flash * 0.70)
+        lt = _mix(lt, FOREDK, flash * 0.55)
+    z = 0.0 + sc * 0.10
+
     hipy = 0.47
-    for li, off in ((0, 0.0), (1, 0.5)):
+    for li, off in ((1, 0.5), (0, 0.0)):
         A, lift, duty = 0.155, 0.10, 0.60
         p = (ph + off) % 1.0
         if stopped:
@@ -916,51 +973,59 @@ def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped):
         else:
             k = (p - duty) / (1.0 - duty)
             fx, fy = -A + 2.0 * A * k, lift * math.sin(math.pi * k)
-        kx, ky, fx, fy = _knee(0.0, hipy, fx, fy, 0.26, 0.25, -1.0)
-        la = a * (1.0 if li == 0 else 0.62)
-        _P(out, [T(0.0, hipy), T(kx, ky), T(fx, fy)], col, la)
-        _L(out, *(T(fx, fy) + T(fx + 0.070, fy)), col, la * 0.8)
+        kx, ky, fx, fy = _knee(0.0, hipy, fx, fy, 0.26, 0.25, 1.0)
+        cc = dk if li else lt
+        la = a * (0.80 if li else 1.0)
+        _seg(out, *(T(0.0, hipy) + T(kx, ky)), cc, la, z + 0.01, 0.085 * sc)
+        _seg(out, *(T(kx, ky) + T(fx, fy)), cc, la, z + 0.01, 0.072 * sc)
+        _seg(out, *(T(fx, fy) + T(fx + 0.062, fy)), cc, la, z + 0.012, 0.038 * sc)
 
     shy = 0.82
-    _P(out, [T(-0.078, hipy), T(-0.088 + lean, shy), T(0.088 + lean, shy),
-             T(0.078, hipy), T(-0.078, hipy)], col, a)
-    for k in (0.36, 0.70):
-        _L(out, *(T(-0.078 + (lean - 0.010) * k, hipy + (shy - hipy) * k)
-                  + T(0.078 + (lean + 0.010) * k, hipy + (shy - hipy) * k)),
-           col, a * 0.30)
-    hdx, hdy = lean * 1.15 + 0.012, 0.925
-    _NG(out, *(T(hdx, hdy)), 0.072 * sc, 6, 0.32, col, a, ry=0.082 * sc)
-    _L(out, *(T(hdx - 0.030, hdy - 0.082) + T(hdx + 0.030, hdy - 0.082)),
-       col, a * 0.6)
+    coat = [T(-0.086, hipy - 0.10), T(0.086, hipy - 0.10),
+            T(0.092 + lean, shy), T(-0.092 + lean, shy)]
+    _fill(out, coat, dk, a, z + 0.02)
+    _fill(out, [T(0.016, hipy - 0.10), T(0.086, hipy - 0.10),
+                T(0.092 + lean, shy), T(0.020 + lean, shy)], lt, a, z + 0.025)
+    _path(out, coat, ed, a * 0.95, z + 0.05, LWC, close=True)
 
-    # the near arm swings against the near leg; stopped, it hangs
+    hdx, hdy = lean * 1.15 + 0.012, 0.930
+    head = [T(hdx + 0.092 * math.cos(ang), hdy + 0.104 * math.sin(ang))
+            for ang in [i * math.pi / 3.0 + 0.30 for i in range(6)]]
+    _fill(out, head, dk, a, z + 0.02)
+    _fill(out, [T(hdx + 0.006, hdy - 0.100), T(hdx + 0.092, hdy - 0.034),
+                T(hdx + 0.082, hdy + 0.072), T(hdx + 0.012, hdy + 0.100)],
+          lt, a, z + 0.025)
+    _path(out, head, ed, a, z + 0.05, LWC, close=True)
+
     if stopped:
         hxk, hyk = 0.045, 0.50
     else:
         hxk = 0.115 * math.cos(2.0 * math.pi * (ph + 0.5))
         hyk = 0.52 + 0.035 * math.sin(2.0 * math.pi * (ph + 0.5))
-    ekx, eky, hxk, hyk = _knee(0.070 + lean, shy - 0.030, hxk, hyk, 0.20, 0.19, 1.0)
-    _P(out, [T(0.070 + lean, shy - 0.030), T(ekx, eky), T(hxk, hyk)], col, a * 0.9)
+    ekx, eky, hxk, hyk = _knee(0.070 + lean, shy - 0.030, hxk, hyk, 0.20, 0.19, -1.0)
+    _seg(out, *(T(0.070 + lean, shy - 0.030) + T(ekx, eky)), lt, a, z + 0.04,
+         0.062 * sc)
+    _seg(out, *(T(ekx, eky) + T(hxk, hyk)), lt, a, z + 0.04, 0.052 * sc)
 
-    if umb:
-        ucx, ucy, R = lean * 1.30, 1.145, 0.315
-        pts = []
-        for i in range(7):
-            aa = math.pi * (0.14 + 0.72 * i / 6.0)
-            pts.append(T(ucx + R * math.cos(aa), ucy + R * 0.46 * math.sin(aa)))
-        _P(out, pts, col, a)
-        for i in (0, 2, 4, 6):
-            aa = math.pi * (0.14 + 0.72 * i / 6.0)
-            _L(out, *(T(ucx, ucy) + T(ucx + R * math.cos(aa),
-                                      ucy + R * 0.46 * math.sin(aa))),
-               col, a * 0.40)
-        _L(out, *(T(ucx, ucy) + T(0.055 + lean, 0.79)), col, a * 0.7)
-        for i in (0, 3, 6):                       # the run-off at the rim
-            aa = math.pi * (0.14 + 0.72 * i / 6.0)
-            rx_ = ucx + R * math.cos(aa)
-            ry_ = ucy + R * 0.46 * math.sin(aa)
+    # The umbrella only goes up once it is actually raining. Six people holding
+    # umbrellas open on a dry evening is the single fastest way to tell an audience
+    # the weather is a parameter and not a story.
+    up = _ss(0.10, 0.30, rain) if umb else 0.0
+    if up > 0.02:
+        ucx, ucy = lean * 1.30, 1.100
+        R = 0.310 * (0.40 + 0.60 * up)
+        rim = [T(ucx + R * math.cos(math.pi * (1.0 - i / 7.0)),
+                 ucy + R * 0.34 * math.sin(math.pi * (1.0 - i / 7.0)))
+               for i in range(8)]
+        _fill(out, rim, dk, a, z + 0.06)
+        _fill(out, [T(ucx, ucy)] + rim[4:], lt, a, z + 0.065)
+        _path(out, rim, ed, a, z + 0.08, LWC, close=True)
+        _seg(out, *(T(ucx, ucy) + T(0.055 + lean, 0.79)), ed, a * 0.9, z + 0.055,
+             0.016 * sc)
+        for i in (0, 4, 7):
             dl = 0.05 + 0.07 * ((t * 2.3 + i * 0.37) % 1.0)
-            _L(out, *(T(rx_, ry_) + T(rx_, ry_ - dl)), RAIN, a * 0.55)
+            _seg(out, rim[i][0], rim[i][1], rim[i][0], rim[i][1] - dl * sc,
+                 RAIN, a * 0.45 * rain, z + 0.05, LWC * 0.7)
     return
 
 
@@ -976,20 +1041,16 @@ def _bolt(out, bx, age, ink, seed):
     for i in range(n):
         x += (_rh(seed * 13.0 + i * 3.7) - 0.5) * 0.115 + 0.010
         pts.append((x, y0 + (y1 - y0) * (i + 1) / float(n)))
-    _P(out, pts, FLASH, a)
-    # a second pass a hair to the side: the strike has to out-read the sky it just
-    # turned white, and one instanced line at 1.45 px cannot
-    _P(out, [(q[0] + 0.006, q[1]) for q in pts], FLASH, a * 0.75)
-    _P(out, [(q[0] - 0.006, q[1]) for q in pts], FLASH, a * 0.75)
+    _path(out, pts, FLASH, a, 0.52, 0.012)
+    _path(out, pts, (1.0, 1.0, 1.0), a * 0.9, 0.53, 0.004)
     for bi, si in ((0, 3), (1, 6)):
         bxx, byy = pts[si]
         d = 1.0 if _rh(seed * 5.0 + bi) > 0.5 else -1.0
         for j in range(4):
             nx = bxx + d * (0.045 + 0.030 * _rh(seed + bi * 9.0 + j))
             ny = byy - 0.055
-            _L(out, bxx, byy, nx, ny, FLASH, a * 0.62)
+            _seg(out, bxx, byy, nx, ny, FLASH, a * 0.62, 0.52, 0.007)
             bxx, byy = nx, ny
-    return
 
 
 def _drone(out, cx, cy, amt, energy, t, ink):
@@ -998,19 +1059,18 @@ def _drone(out, cx, cy, amt, energy, t, ink):
     # them from reading as another audio meter.
     for i in range(NBAND):
         ri = (t * 0.195 + i / float(NBAND)) % 1.0
-        a = ink * amt * ((1.0 - ri) ** 1.45) * (0.26 + 0.85 * energy)
+        a = ink * amt * 0.62 * ((1.0 - ri) ** 1.6) * (0.22 + 0.80 * energy)
         if a < 0.007:
             continue
-        yy = cy + ri * 0.46
-        hw = 0.105 + ri * 0.44
+        yy = cy + ri * 0.21
+        hw = 0.090 + ri * 0.20
         pts = []
         for k in range(11):
             u = -1.0 + 2.0 * k / 10.0
             pts.append((cx + u * hw,
-                        yy - 0.036 * u * u
-                        + 0.014 * math.sin(u * 6.5 + t * 2.6 + i * 1.7)))
-        _P(out, pts, PURPLE, a)
-    return
+                        yy - 0.020 * u * u
+                        + 0.008 * math.sin(u * 6.5 + t * 2.6 + i * 1.7)))
+        _path(out, pts, PURPLE, a, -0.05, 0.0038)
 
 
 # --- state ----------------------------------------------------------------------
@@ -1023,14 +1083,14 @@ def _new(seed):
         'static': _gen_static(rs),
         'rx': u(-1.50, 1.50, NRAIN), 'rph': u(0.0, 1.0, NRAIN),
         'rv': np.choose(lay, [0.30, 0.44, 0.62]) * u(0.88, 1.14, NRAIN),
-        'rl': np.choose(lay, [0.048, 0.080, 0.132]) * u(0.80, 1.25, NRAIN),
-        'ra': np.choose(lay, [0.26, 0.48, 0.86]),
+        'rl': np.choose(lay, [0.040, 0.066, 0.104]) * u(0.80, 1.25, NRAIN),
+        'ra': np.choose(lay, [0.22, 0.40, 0.72]),
         'rlay': lay,
         'sx': u(-1.32, 1.32, NSPL), 'sph': u(0.0, 1.0, NSPL),
         'srate': u(0.65, 2.10, NSPL),
         'sy': np.choose(np.arange(NSPL) % 3,
-                        [GROUNDY, GROUNDY + 0.030, GROUNDY + 0.085]),
-        'people': [], 'bolts': [], 'coins': [], 'seen': {},
+                        [GROUNDY, GROUNDY + 0.030, GROUNDY + 0.074]),
+        'people': [], 'bolts': [], 'coins': [], 'rings': [], 'seen': {},
         'spawn_t': -9.0, 'strike_t': -9.0, 'press': 7, 'press_t': -9.0,
         'lastt': None, 'labelt': -99.0, 'lastcp': -1, 'rng': rs, 'census': '',
     }
@@ -1051,12 +1111,11 @@ def _delta(S, inp, name):
 def _spawn(S, rs, crowd, t, forced=False):
     lane = 0 if rs.random() < 0.18 else (1 if rs.random() < 0.46 else 2)
     gy, sc, al = LANES[lane]
-    # speed scales with size or the far lane looks like it is running
     d = 1.0 if rs.random() < 0.5 else -1.0
     S['people'].append(dict(
         x=(-1.45 if d > 0 else 1.45), gy=gy, sc=sc, al=al, dir=d,
         spd=(0.155 + 0.155 * rs.random()) * sc / 0.38 * (0.85 + 0.45 * crowd),
-        umb=rs.random() < 0.62, ph=rs.random(), lane=lane,
+        umb=rs.random() < 0.78, ph=rs.random(), lane=lane,
         lean=(0.045 + 0.055 * rs.random()) * (1.0 if not forced else 0.5),
         willstop=False, stopped=False, stopuntil=0.0, gave=False))
     S['spawn_t'] = t
@@ -1089,9 +1148,6 @@ def onCook(scriptOp):
     bass = ch('bass'); high = ch('high'); energy = ch('energy')
     kickenv = ch('kickenv'); dropenv = ch('dropenv'); flash = ch('flash')
 
-    # PRIME: the builder force-cooks the director, so frame one already has non-zero
-    # counters. Read as deltas that is a thunderclap, a passer-by and a reseed all
-    # at once, and the scene opens mid-event.
     if first and d is not None:
         for nm in ('kickcnt', 'accentcnt', 'dropcnt', 'boltcnt', 'passercnt',
                    'stoppercnt', 'reseedcnt'):
@@ -1108,9 +1164,10 @@ def onCook(scriptOp):
 
     slen = max(1.0, ch('storylen', 240.0))
     f = min(1.0, max(0.0, ch('show', 0.0) / slen))
-    ink = float(par.Ink.eval()) * (1.0 + 0.14 * kickenv + 0.22 * dropenv
+    ink = float(par.Ink.eval()) * (1.0 + 0.08 * kickenv + 0.12 * dropenv
                                   + 0.30 * flash)
     rainpar = float(par.Rain.eval())
+    raudio = float(par.Rainaudio.eval())
     windpar = float(par.Wind.eval())
     crowdpar = float(par.Crowd.eval())
     thunpar = float(par.Thunder.eval())
@@ -1119,31 +1176,46 @@ def onCook(scriptOp):
     reflpar = float(par.Reflect.eval())
 
     # --- the arc. Endpoints match, so the loop has no seam ----------------------
+    # THE WEATHER IS THE STORY AND THE MUSIC IS NOT. Rain used to swing +-28% with
+    # the energy of the track, which made the downpour pump on the beat like a
+    # compressor and left nothing else in the frame doing anything. It rides the
+    # audio by 6% now, and what the music actually drives is everything that is
+    # ALIVE: the bellows, the lamp, the drone, the rings on the puddles, the
+    # windows. Weather moves on weather time.
     rain = float(np.interp(f, ARC_F, ARC_RAIN)) * rainpar
     crowd = float(np.interp(f, ARC_F, ARC_CROWD))
     thun = float(np.interp(f, ARC_F, ARC_THUN)) * thunpar
     wind = float(np.interp(f, ARC_F, ARC_WIND)) * windpar
-    rain = rain * (0.86 + 0.28 * energy)
-    wind = wind * (0.88 + 0.30 * bass)
+    rain = rain * (1.0 + (0.06 * energy - 0.02) * raudio)
+    wind = wind * (1.0 + (0.08 * bass - 0.03) * raudio)
 
     nbolt = _delta(S, d, 'boltcnt')
     npass = _delta(S, d, 'passercnt')
     nstop = _delta(S, d, 'stoppercnt')
     ndrop = _delta(S, d, 'dropcnt')
     nkick = _delta(S, d, 'kickcnt')
+    naccent = _delta(S, d, 'accentcnt')
 
-    # --- thunder. The bass opens the sky; failing that, the storm does it alone --
+    # --- thunder: nothing before chapter 6, because thun is 0 there -------------
     strike = nbolt > 0
-    if ndrop and rs.random() < 0.30 + 0.62 * thun:
-        strike = True
-    gap = 2.6 + 16.0 * (1.0 - min(1.0, thun))
-    if t - S['strike_t'] > gap and rs.random() < 0.02 * (0.3 + thun):
-        strike = True
+    if thun > 0.03:
+        if ndrop and rs.random() < 0.25 + 0.65 * thun:
+            strike = True
+        gap = 2.4 + 14.0 * (1.0 - min(1.0, thun))
+        if t - S['strike_t'] > gap and rs.random() < 0.025 * thun:
+            strike = True
     if strike:
         S['strike_t'] = t
         S['bolts'].append([t, rs.uniform(-0.95, 0.95), rs.uniform(1.0, 900.0)])
         comp.store('strike', 1.0)
     del S['bolts'][:-3]
+
+    # rings on the wet road, one per accented kick. Small, low, and the reason the
+    # street reads as reactive without the rain having to pump.
+    if naccent and rain > 0.12:
+        S['rings'].append([t, rs.uniform(-1.05, 1.05),
+                           GROUNDY - rs.uniform(0.02, 0.20)])
+    del S['rings'][:-7]
 
     # --- the crowd --------------------------------------------------------------
     target = int(round(1.1 + 6.4 * crowd * crowdpar))
@@ -1154,8 +1226,6 @@ def onCook(scriptOp):
             and t - S['spawn_t'] > 0.22 + 1.5 * (1.0 - crowd)):
         _spawn(S, rs, crowd, t)
 
-    # Someone stopping is the rarest thing that happens here, so it is never left
-    # to chance alone: chapter 6 raises the odds, and the pad forces it outright.
     if nstop or (LISTEN0 <= f <= LISTEN1 and rs.random() < 0.004):
         best, bd = None, 9.0
         for p in S['people']:
@@ -1205,6 +1275,7 @@ def onCook(scriptOp):
             a = a.reshape(1, -1)
         blocks.append((a, reflect))
 
+
     # --- the man ----------------------------------------------------------------
     period = 60.0 / max(1.0, float(par.Refbpm.eval()))
     pump = 0.5 - 0.5 * math.cos(2.0 * math.pi * (ch('musical', 0.0)
@@ -1237,8 +1308,12 @@ def onCook(scriptOp):
             face = -p['dir'] if p['stopped'] else p['dir']
             lean = 0.0 if p['stopped'] else p['lean'] * (0.6 + 0.9 * wind * 0.3)
             _person(pseg, p['x'], p['gy'], p['sc'], p['ph'], p['umb'],
-                    p['al'], redk, face, lean, ink, t, p['stopped'])
+                    p['al'], redk, face, lean, ink, t, p['stopped'], rain, flash)
         push(pseg, reflect=True)
+
+    fseg = []
+    _posts(fseg, ink, flash)
+    push(fseg)
 
     # --- coins ------------------------------------------------------------------
     cseg = []
@@ -1251,12 +1326,29 @@ def onCook(scriptOp):
         cx_ = c[1] + (casex - c[1]) * k
         cy_ = c[2] + (casey - c[2]) * k - 0.13 * math.sin(math.pi * k)
         if k < 1.0:
-            _NG(cseg, cx_, cy_, 0.013, 4, age * 6.0, RED2, ink * 1.1)
+            _fill(cseg, [(cx_ - 0.012, cy_), (cx_, cy_ + 0.014),
+                         (cx_ + 0.012, cy_), (cx_, cy_ - 0.014)],
+                  LAMPCORE, ink * 1.1, 0.30, slabs=3)
         else:
             rr = 0.02 + 0.16 * (age - 0.52) / 1.18
-            _NG(cseg, casex, casey, rr, 7, age * 1.4, RED2,
-                ink * 0.85 * max(0.0, 1.0 - (age - 0.52) / 1.18))
+            _ngon(cseg, casex, casey, rr, 8, age * 1.4, LAMPCORE,
+                  ink * 0.85 * max(0.0, 1.0 - (age - 0.52) / 1.18), 0.30,
+                  0.0040, ry=rr * 0.34)
     push(cseg)
+
+    # --- rings on the puddles, one per accented kick ---------------------------
+    gseg = []
+    for rg in S['rings']:
+        age = t - rg[0]
+        if age > RINGLIFE:
+            continue
+        rr = 0.035 + 0.30 * (age / RINGLIFE)
+        a = ink * 0.55 * ((1.0 - age / RINGLIFE) ** 2) * min(1.0, rain * 1.6)
+        if a < 0.01:
+            continue
+        _ngon(gseg, rg[1], rg[2], rr, 9, 0.0, RAIN, a, -0.10, 0.0030,
+              ry=rr * 0.24)
+    push(gseg)
 
     bseg = []
     for b in S['bolts']:
@@ -1265,81 +1357,77 @@ def onCook(scriptOp):
             _bolt(bseg, b[1], age, ink, b[2])
     push(bseg)
 
-    # --- the rain that is geometry ----------------------------------------------
-    ph = np.mod(S['rph'] + t * S['rv'] * (0.72 + 0.55 * rain), 1.0)
+    # --- the rain that is geometry. A drizzle is 150 streaks, not thousands -----
+    ph = np.mod(S['rph'] + t * S['rv'] * (0.80 + 0.30 * rain), 1.0)
     ry0 = 0.680 - ph * 1.360
     rx0 = S['rx'] + wind * (0.680 - ry0) * 0.300
     sl = wind * 0.44
     nrm = 1.0 / math.sqrt(1.0 + sl * sl)
-    rx1 = rx0 + sl * nrm * S['rl']
-    ry1 = ry0 - nrm * S['rl']
-    live = (ry1 > GROUNDY - 0.010)
-    ra = (S['ra'] * ink * (0.30 + 0.95 * rain) * (1.0 + 2.2 * flash)
-          * live.astype(np.float64))
+    rlen = S['rl'] * (0.55 + 0.75 * min(1.2, rain))
+    rx1 = rx0 + sl * nrm * rlen
+    ry1 = ry0 - nrm * rlen
+    live = (ry1 > GROUNDY - 0.010) & (rain > 0.015)
+    ra = S['ra'] * ink * (0.15 + 1.05 * rain) * (1.0 + 2.2 * flash) \
+        * live.astype(np.float64)
     rcol = np.where(S['rlay'][:, None] > 0.5,
                     np.array(RAIN)[None, :], np.array(RAINFAR)[None, :])
     rz = np.choose(S['rlay'], [-0.10, 0.10, 0.34])
-    rain_arr = np.stack([rx0, ry0, rx1, ry1, rcol[:, 0], rcol[:, 1], rcol[:, 2],
-                         ra, rz, np.ones(NRAIN)], axis=1)
-    blocks.append((rain_arr, False))
+    rw = np.choose(S['rlay'], [0.0016, 0.0022, 0.0032])
+    blocks.append((np.stack([rx0, ry0, rx1, ry1, rcol[:, 0], rcol[:, 1],
+                             rcol[:, 2], ra, rz, np.ones(NRAIN), rw], axis=1),
+                   False))
 
     # --- splashes, on the actual street line ------------------------------------
     su = np.mod(t * S['srate'] * (0.45 + 0.95 * rain) + S['sph'], 1.0)
     sage = np.clip(su / 0.30, 0.0, 1.0)
-    sact = (su < 0.30).astype(np.float64)
-    sr = 0.014 + 0.046 * sage
-    sa = ((1.0 - sage) ** 1.7) * sact * ink * (0.25 + 0.95 * rain) * 0.95
+    sact = (su < 0.30).astype(np.float64) * (1.0 if rain > 0.04 else 0.0)
+    sr = 0.012 + 0.038 * sage
+    sa = ((1.0 - sage) ** 1.7) * sact * ink * (0.15 + 1.0 * rain) * 0.95
     zs = np.full(NSPL, 0.05)
     one = np.ones(NSPL)
-    sp1 = np.stack([S['sx'], S['sy'], S['sx'] - sr, S['sy'] + sr * 0.85,
-                    one * RAIN[0], one * RAIN[1], one * RAIN[2], sa, zs, one],
-                   axis=1)
-    sp2 = np.stack([S['sx'], S['sy'], S['sx'] + sr * 0.9, S['sy'] + sr * 0.75,
-                    one * RAIN[0], one * RAIN[1], one * RAIN[2], sa, zs, one],
-                   axis=1)
-    sp3 = np.stack([S['sx'] - sr * 1.3, S['sy'] + sr * 0.2,
-                    S['sx'] + sr * 1.3, S['sy'] + sr * 0.2,
-                    one * RAIN[0], one * RAIN[1], one * RAIN[2], sa * 0.5,
-                    zs, one], axis=1)
-    blocks.append((sp1, False))
-    blocks.append((sp2, False))
-    blocks.append((sp3, False))
+    ww = np.full(NSPL, 0.0024)
+    for ox, oy, am in ((-1.0, 0.85, 1.0), (0.9, 0.75, 1.0)):
+        blocks.append((np.stack([S['sx'], S['sy'], S['sx'] + ox * sr,
+                                 S['sy'] + oy * sr,
+                                 one * RAIN[0], one * RAIN[1], one * RAIN[2],
+                                 sa * am, zs, one, ww], axis=1), False))
 
-    # --- the city, static, and it is the lightning that reveals it --------------
+    # --- the city, static; the windows are the quietest reactive thing here -----
     st = S['static']
     n = st['n']
-    sa2 = st['a'] * ink * (1.0 + st['lift'] * flash)
-    st_arr = np.stack([st['x0'], st['y0'], st['x1'], st['y1'],
-                       st['r'], st['g'], st['b'], sa2, st['z'],
-                       np.zeros(n)], axis=1)
-    blocks.append((st_arr, False))
+    flick = np.where(st['kind'] > 0.5,
+                     0.72 + 0.20 * np.sin(st['fph'] + t * 0.55) + 0.30 * high,
+                     1.0)
+    sa2 = st['a'] * ink * flick * (1.0 + 1.6 * flash * (st['kind'] < 0.5))
+    blocks.append((np.stack([st['x0'], st['y0'], st['x1'], st['y1'],
+                             st['r'], st['g'], st['b'], sa2, st['z'],
+                             np.zeros(n), st['w']], axis=1), False))
 
 
     # --- the wet street ---------------------------------------------------------
     # Mirror everything that stands on the ground. The shimmer is a horizontal
     # banding on the mirrored y, not a displacement: on a street the water is a
     # film, not a body, so what breaks the reflection is the surface rippling, and
-    # the figure should smear along its own length rather than wander sideways.
+    # a flat shape should smear along its own length rather than wander sideways.
     if reflpar > 0.01:
         refl = []
         for (arr, dorefl) in blocks:
             if not dorefl or not len(arr):
                 continue
-            src = arr
-            above = np.maximum(src[:, 1], src[:, 3]) > GROUNDY + 0.004
+            above = np.maximum(arr[:, 1], arr[:, 3]) > GROUNDY + 0.004
             k = np.nonzero(above)[0]
             if not len(k):
                 continue
-            m = src[k].copy()
-            m[:, 1] = 2.0 * GROUNDY - src[k, 1]
-            m[:, 3] = 2.0 * GROUNDY - src[k, 3]
+            m = arr[k].copy()
+            m[:, 1] = 2.0 * GROUNDY - arr[k, 1]
+            m[:, 3] = 2.0 * GROUNDY - arr[k, 3]
             ymid = (m[:, 1] + m[:, 3]) * 0.5
             dep = np.clip(GROUNDY - ymid, 0.0, 0.8)
-            wob = 0.010 * (0.4 + 1.4 * rain) * np.sin(ymid * 62.0 - t * 3.1)
-            m[:, 0] = m[:, 0] + wob
-            m[:, 2] = m[:, 2] + wob
-            shim = 0.34 + 0.66 * (0.5 + 0.5 * np.sin(ymid * 118.0 + t * 2.4))
-            m[:, 7] = m[:, 7] * 0.36 * reflpar * shim * np.exp(-dep * 2.2)
+            wob = 0.009 * (0.5 + 1.1 * rain) * np.sin(ymid * 62.0 - t * 3.1)
+            m[:, 0] += wob
+            m[:, 2] += wob
+            shim = 0.36 + 0.64 * (0.5 + 0.5 * np.sin(ymid * 118.0 + t * 2.4))
+            m[:, 7] = m[:, 7] * 0.34 * reflpar * shim * np.exp(-dep * 2.2)
             m[:, 4] *= 0.86
             m[:, 5] *= 0.72
             m[:, 6] = np.minimum(1.4, m[:, 6] * 1.18)
@@ -1350,31 +1438,40 @@ def onCook(scriptOp):
             blocks.append((m, False))
 
     parts = [b for (b, _) in blocks if len(b)]
-    A = np.concatenate(parts, axis=0) if parts else np.zeros((0, 10))
+    A = np.concatenate(parts, axis=0) if parts else np.zeros((0, 11))
 
     x0, y0, x1, y1 = A[:, 0], A[:, 1], A[:, 2], A[:, 3]
     dx, dy = x1 - x0, y1 - y0
     ln = np.hypot(dx, dy)
     al = A[:, 7]
-    keep = ((np.minimum(x0, x1) < CULLX) & (np.maximum(x0, x1) > -CULLX)
-            & (np.minimum(y0, y1) < CULLY) & (np.maximum(y0, y1) > -CULLY)
-            & (ln > MINLEN) & (al > 0.005))
+    wd = A[:, 10]
+    keep = ((np.minimum(x0, x1) - wd < CULLX) & (np.maximum(x0, x1) + wd > -CULLX)
+            & (np.minimum(y0, y1) - wd < CULLY)
+            & (np.maximum(y0, y1) + wd > -CULLY)
+            & (ln > MINLEN) & (al > 0.005) & (wd > 1e-5))
     idx = np.nonzero(keep)[0]
     # Emission order is priority: the man, then the drone, then whoever is walking
-    # past, then the weather. If the pool ever ran dry it would be the far rain
+    # past, then the weather. If the pool ever ran dry it would be the far drizzle
     # that thinned, never him.
     if len(idx) > MAXSEG:
         idx = idx[:MAXSEG]
+    # Two different orderings, and they are both needed. Truncation uses EMISSION
+    # order, so a full pool drops far drizzle and never the man. Drawing uses
+    # DEPTH order, because one instanced geometry is one object to the sorter and
+    # nothing else will put the background behind the foreground.
+    idx = idx[np.argsort(A[idx, 8], kind='stable')]
     n = len(idx)
 
     out = np.zeros((11, MAXSEG), dtype=np.float64)
-    out[4] = 1.0
     out[6] = 1.0
     if n:
         out[0, :n] = (x0[idx] + x1[idx]) * 0.5
         out[1, :n] = (y0[idx] + y1[idx]) * 0.5
         out[2, :n] = A[idx, 8]
         out[3, :n] = np.degrees(np.arctan2(-dx[idx], dy[idx]))
+        # sx is the WIDTH of the quad and sy its LENGTH. That one extra channel is
+        # the whole difference between a wireframe and a flat cel.
+        out[4, :n] = np.maximum(wd[idx], 1e-5)
         out[5, :n] = np.maximum(ln[idx], 1e-5)
         out[7, :n] = np.clip(A[idx, 4], 0.0, 4.0)
         out[8, :n] = np.clip(A[idx, 5], 0.0, 4.0)
@@ -1399,7 +1496,8 @@ def onCook(scriptOp):
     try:
         par.Chapter.val = float(cp)
         par.Segs.val = float(n)
-        par.Rainnow.val = min(1.0, rain)
+        par.Rainnow.val = min(1.0, max(0.0, rain))
+        par.Windnow.val = wind
         par.Walkers.val = float(len(S['people']))
         par.Labelfade.val = lf
         txt = CHECKPOINTS[cp][1].strip()
@@ -1408,14 +1506,12 @@ def onCook(scriptOp):
     except Exception:
         pass
 
-    S['census'] = ('f %.3f | rain %.2f wind %.2f | people %d | lines %d/%d '
-                   '| bolts %d | static %d'
-                   % (f, rain, wind, len(S['people']), n, MAXSEG,
+    S['census'] = ('f %.3f | rain %.2f wind %.2f thun %.2f | people %d '
+                   '| quads %d/%d | bolts %d | static %d'
+                   % (f, rain, wind, thun, len(S['people']), n, MAXSEG,
                       len(S['bolts']), st['n']))
     return
 '''
-
-
 eng_src = C(textDAT, 'engine_src', 1780, 980)
 
 
@@ -1427,21 +1523,34 @@ eng_src.text = hdr(
     CHECKPOINTS=CHECKPOINTS, MAXSEG=MAXSEG, GROUNDY=GROUNDY, MUSX=MUSX,
     MSCALE=MSCALE, SEED0=20260918,
     CH=('tx', 'ty', 'tz', 'rz', 'sx', 'sy', 'sz', 'r', 'g', 'b', 'a'),
-    SKYBASE=GROUNDY + 0.145,
-    RAIN=PAL['RAIN'], RAINFAR=PAL['RAINFAR'], STREET=PAL['STREET'],
-    SKYLINE=PAL['SKYLINE'], WINDOW=PAL['WINDOW'], PERSON=PAL['PERSON'],
-    RED=PAL['RED'], RED2=PAL['RED2'], PURPLE=PAL['PURPLE'], FLASH=PAL['FLASH'],
-    NRAIN=330, NSPL=44, NBAND=6,
+    SKYBASE=GROUNDY + 0.150,
+    LWCHAR=LWCHAR, LWBG=LWBG,
+    RAIN=PAL['RAIN'], RAINFAR=PAL['RAINFAR'], ROAD=PAL['ROAD'],
+    KERB=PAL['KERB'], FOREDK=PAL['FOREDK'], WINDOW=PAL['WINDOW'],
+    BLDGFAR=PAL['BLDGFAR'], BLDGDK=PAL['BLDGDK'], BLDGLT=PAL['BLDGLT'],
+    PERSONDK=PAL['PERSONDK'], PERSONLT=PAL['PERSONLT'],
+    PERSONED=PAL['PERSONED'],
+    MUSDK=PAL['MUSDK'], MUSLT=PAL['MUSLT'], MUSED=PAL['MUSED'],
+    HARMDK=PAL['HARMDK'], HARMLT=PAL['HARMLT'],
+    LAMP=PAL['LAMP'], LAMPCORE=PAL['LAMPCORE'],
+    PURPLE=PAL['PURPLE'], FLASH=PAL['FLASH'],
+    # a DRIZZLE. 150 near streaks, not thousands: the volume of the rain is in
+    # the shader, and these are only the ones that must fall in front of people.
+    NRAIN=150, NSPL=44, NBAND=6, RINGLIFE=1.6,
     # gy, scale, alpha — further away is higher on screen, smaller, and dimmer
-    LANES=((GROUNDY + 0.082, 0.222, 0.58), (GROUNDY + 0.030, 0.305, 0.84),
-           (GROUNDY - 0.070, 0.425, 1.00)),
-    BOLTLIFE=0.24, STOPDWELL=7.5, LISTEN0=0.66, LISTEN1=0.79,
-    ARC_F=(0.00, 0.12, 0.26, 0.42, 0.56, 0.68, 0.80, 0.92, 1.00),
-    ARC_RAIN=(0.42, 0.62, 0.74, 0.94, 1.00, 0.86, 0.70, 0.50, 0.42),
-    ARC_CROWD=(0.42, 0.66, 1.00, 0.82, 0.52, 0.38, 0.14, 0.34, 0.42),
-    ARC_THUN=(0.10, 0.24, 0.40, 1.00, 0.86, 0.38, 0.20, 0.12, 0.10),
-    ARC_WIND=(0.30, 0.50, 0.56, 0.95, 1.00, 0.70, 0.44, 0.30, 0.30),
-    CULLX=1.30, CULLY=0.70, MINLEN=0.0016,
+    LANES=((GROUNDY + 0.082, 0.265, 0.62), (GROUNDY + 0.030, 0.360, 0.86),
+           (GROUNDY - 0.074, 0.505, 1.00)),
+    BOLTLIFE=0.24, STOPDWELL=7.5, LISTEN0=0.79, LISTEN1=0.90,
+    # THE WEATHER IS AN ARC, NOT A LEVEL. Three dry chapters with a rising wind,
+    # the first drops at chapter 4, and the sky does not open until chapter 6 —
+    # thunder is exactly zero before then, so it cannot leak early. Endpoints
+    # match so the wrap has no seam.
+    ARC_F=(0.00, 0.135, 0.270, 0.400, 0.470, 0.530, 0.660, 0.800, 0.910, 1.00),
+    ARC_RAIN=(0.00, 0.00, 0.020, 0.105, 0.280, 0.420, 0.620, 0.480, 0.190, 0.00),
+    ARC_CROWD=(0.55, 0.95, 0.850, 0.700, 0.600, 0.480, 0.400, 0.330, 0.470, 0.55),
+    ARC_THUN=(0.00, 0.00, 0.000, 0.000, 0.000, 0.050, 1.000, 0.420, 0.100, 0.00),
+    ARC_WIND=(0.18, 0.26, 0.720, 0.620, 0.580, 0.620, 0.900, 0.540, 0.300, 0.18),
+    LINEW=1.0, CULLX=1.34, CULLY=0.74, MINLEN=0.0012,
 ) + ENGINE_BODY
 
 engine = C(scriptCHOP, 'engine', 1940, 980)
@@ -1452,29 +1561,33 @@ W(director, engine, 0)
 # ---------------------------------------------------------------------------
 # GEOMETRY AND RENDER — six TOPs, none of them a pass-through
 # ---------------------------------------------------------------------------
-SHAPE_BODY = '''# One unit segment along +y, centred. Everything else is instance transform.
+SHAPE_BODY = '''# ONE UNIT QUAD, 1x1, centred, and it is the entire drawing system.
+# sx scales its width and sy its length, so the same instance is a 3 px outline, a
+# limb, or a slab of flat colour depending only on two numbers. Replacing the unit
+# LINE with a unit QUAD is what let this scene go from wireframe to blocked-in flat
+# colour without a second render pass, a second material, or a triangulator.
 
 
 def onCook(scriptOp):
     scriptOp.clear()
-    a = scriptOp.appendPoint(); a.x, a.y, a.z = 0.0, -0.5, 0.0
-    b = scriptOp.appendPoint(); b.x, b.y, b.z = 0.0, 0.5, 0.0
-    ln = scriptOp.appendPoly(2, closed=False, addPoints=False)
-    ln[0].point = scriptOp.points[0]
-    ln[1].point = scriptOp.points[1]
+    pts = ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5))
+    for (px, py) in pts:
+        pt = scriptOp.appendPoint()
+        pt.x, pt.y, pt.z = px, py, 0.0
+    poly = scriptOp.appendPoly(4, closed=True, addPoints=False)
+    for i in range(4):
+        poly[i].point = scriptOp.points[i]
     return
 '''
 shape_src = C(textDAT, 'shape_src', 1300, 200)
 shape_src.text = SHAPE_BODY
-unit_line = C(scriptSOP, 'unit_line', 1440, 200)
+unit_line = C(scriptSOP, 'unit_quad', 1440, 200)
 unit_line.par.callbacks = shape_src.path
 
-mat_line = C(lineMAT, 'mat_line', 1600, 200)
-soft(mat_line, widthnear=1.45, widthfar=1.45, widthaffectedbyfov=False,
-     linenearalpha=1.0, blending=True, depthtest=False, depthwriting=False)
-mat_line.par.widthnear.expr = ("max(0.8, parent().par.Linewidth * (1.0 + 0.12 * %s "
-                               "+ 0.55 * %s))" % (D('kickenv'), D('flash')))
-mat_line.par.widthfar.expr = mat_line.par.widthnear.expr
+mat_line = C(constantMAT, 'mat_flat', 1600, 200)
+soft(mat_line, blending=True, depthtest=False, depthwriting=False, alpha=1.0)
+SRCB = menu_pick(mat_line.par.srcblend, 'sa', 'srcalpha')
+DSTB = menu_pick(mat_line.par.destblend, 'omsa', 'oneminussrcalpha')
 
 g_lines = C(geometryCOMP, 'geo_lines', 1780, 200)
 _stale = g_lines.op('torus1')
@@ -1541,8 +1654,8 @@ out vec4 fragColor;
 const vec3 SKYTOP = ''' + _g3(PAL['SKYTOP']) + ''';
 const vec3 SKYLOW = ''' + _g3(PAL['SKYLOW']) + ''';
 const vec3 CRAIN  = ''' + _g3(PAL['RAIN']) + ''';
-const vec3 CSTREET= ''' + _g3(PAL['STREET']) + ''';
-const vec3 CRED   = ''' + _g3(PAL['RED']) + ''';
+const vec3 CSTREET= ''' + _g3(PAL['ROAD']) + ''';
+const vec3 CRED   = ''' + _g3(PAL['LAMP']) + ''';
 const vec3 CFLASH = ''' + _g3(PAL['FLASH']) + ''';
 
 float hash21(vec2 p) {
@@ -1606,16 +1719,16 @@ void main() {
     // --- three sheets, far to near -------------------------------------------
     float w = uC.w;
     float r = 0.0;
-    r += sheet(uv, 26.0, 0.55, w * 0.22, 26.0, t) * 0.26;
-    r += sheet(uv, 15.0, 0.95, w * 0.26, 18.0, t) * 0.34;
-    r += sheet(uv,  8.5, 1.60, w * 0.30, 12.0, t) * 0.40;
-    r *= 0.22 + 0.58 * rain;
+    r += sheet(uv, 26.0, 0.55, w * 0.22, 30.0, t) * 0.17;
+    r += sheet(uv, 15.0, 0.95, w * 0.26, 22.0, t) * 0.22;
+    r += sheet(uv,  8.5, 1.60, w * 0.30, 15.0, t) * 0.26;
+    r *= 0.06 + 0.94 * rain;
     // the strike is what makes the whole volume of it visible at once
     r *= 1.0 + 3.4 * flash;
-    col += CRAIN * r * (0.24 + 0.16 * uB.y);
+    col += CRAIN * r * (0.30 + 0.06 * uB.y);
     // haze, heaviest just above the road
-    col += mix(CRAIN, SKYLOW, 0.55) * rain * 0.075
-           * exp(-abs(uv.y - hz) * 3.2) * (0.6 + 0.5 * uB.x);
+    col += mix(CRAIN, SKYLOW, 0.55) * rain * 0.085
+           * exp(-abs(uv.y - hz) * 3.2) * (0.85 + 0.15 * uB.x);
 
     // --- the lines, and their glow -------------------------------------------
     vec4 li = texture(sTD2DInputs[0], uv);
@@ -1807,6 +1920,7 @@ if post.warnings():
     print('  [SHADER] %s' % post.warnings())
 
 print('built %s' % s.path)
-print('  antialias -> %r  (menu: %s)' % (AA, list(render_lines.par.antialias.menuNames)))
+print('  antialias -> %r | blend %r over %r' % (AA, SRCB, DSTB))
 print('  %s' % eng_src.module._S['S']['census'])
+print('  chapters: dry 1-3 | rain from 4 | lightning from 6')
 print('  keys: 1-8 chapters | 0 restart | t thunder | p passer-by | s stops | n reseed')
