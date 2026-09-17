@@ -95,6 +95,23 @@ skill's `debugging.md` recipe and record them here.
   blocks the main thread for a long time. Nothing was lost because the `.toe` had been
   written; recovery is to restart TD and reopen the saved file.
   Still unconfirmed whether rapid `set`/`observe` bursts alone can cause it.
+- **The wedge can be TRANSIENT — try again before restarting (observed 2026-09-18).**
+  Building the `monsoon` scene, turning a container's node viewer on and then calling
+  `health` (a project-wide sweep with profiling) produced the exact signature above:
+  two MCP calls timed out, `curl` against the raw endpoint returned `HTTP 000` after a
+  20 s timeout, and the process sat at **99.4% CPU**, `STAT R`, port 9988 still
+  `LISTEN`ing, no `.ips` crash log. **It recovered on its own after roughly a minute**
+  — the next `curl` answered `HTTP 200 in 0.012 s` and CPU fell to 59% — with no
+  restart and no state lost. So the earlier entry's recovery advice ("restart TD and
+  reopen the saved file") is the *last* resort, not the first: wait a minute and
+  re-probe with `curl` first. Nothing here was saved to a `.toe` and nothing needed to
+  be, because the scene rebuilds from its builder script in one call — which is the
+  practical argument for the repo's "scenes must be rebuildable from code" rule.
+- **Node viewers are not free.** With the network editor displaying a scene COMP's
+  internals, TD pulls the node thumbnails and cooks the chain even when nothing else
+  is: measured 30 of 54 ops cooking at ~5 Hz on a scene that was otherwise idle, versus
+  1 op (a time-sliced timer CHOP) with viewers off. On a multi-scene switch rig, patch
+  with the editor out of the tox or in Perform mode.
 - Claude Code's MCP client connects to the bridge at session start. If TD wasn't up
   then, the tools stay missing for a while; the raw endpoint is still drivable with
   `curl` against `http://127.0.0.1:9988/mcp` (plain JSON-RPC) as a workaround, and the
