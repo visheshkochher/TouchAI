@@ -39,7 +39,7 @@ ORTHOH = ORTHOW / ASPECT
 CLOCKLEN = 60.0
 
 STORYDEF = 240.0
-MAXSEG = 3000            # instance pool; fixed, never resized
+MAXSEG = 3400            # instance pool; fixed, never resized
 GROUNDY = -0.260         # the wet street, in world y
 MUSX = -0.245            # where he sits
 MSCALE = 0.440
@@ -198,7 +198,9 @@ for _mn, _ml, _lo, _hi in (('Bpm', 'Detected BPM', 0.0, 200.0),
                            ('Afterglow', 'Afterglow', 0.0, 1.0),
                            ('Rainnow', 'Rain Level', 0.0, 1.0),
                            ('Windnow', 'Wind Level', 0.0, 2.0),
-                           ('Walkers', 'People On Screen', 0.0, 16.0),
+                           ('Walkers', 'People On Screen', 0.0, 24.0),
+                           ('Audience', 'Watching Him', 0.0, 12.0),
+                           ('Rejects', 'Bad Quads Clamped', 0.0, 1e6),
                            ('Segs', 'Quads Drawn', 0.0, float(MAXSEG)),
                            ('Labelfade', 'Readout Fade', 0.0, 1.0),
                            ('Bassm', 'Bass Level', 0.0, 1.0),
@@ -801,7 +803,8 @@ def _gen_static(rs):
     f = lambda L: np.array(L, dtype=np.float64)
     return dict(x0=f(X0), y0=f(Y0), x1=f(X1), y1=f(Y1), r=f(R), g=f(G), b=f(B),
                 a=f(A), z=f(Z), w=f(WD), kind=f(K), n=len(X0),
-                fph=f([rs.uniform(0.0, 6.283) for _ in X0]))
+                fph=f([rs.uniform(0.0, 6.283) for _ in X0]),
+                wb=f([1.0 if rs.random() < 0.45 else 0.0 for _ in X0]))
 
 
 # --- the two lampposts that frame the shot ---------------------------------------
@@ -948,15 +951,16 @@ def _musician(out, ox, oy, sc, pump, press, ink, lamp, kickenv, high, t, flash):
 # both directions — solve the pose in world space with a mirrored frame and every
 # figure walking left has its legs on backwards.
 def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped,
-            rain, flash):
+            rain, flash, var=0.5):
     def T(lx, ly):
         return (px + facing * lx * sc, gy + ly * sc)
 
     LWC = LWCHAR * LINEW
-    a = al * ink
-    dk = _mix(PERSONDK, LAMP, redk * 0.55)
-    lt = _mix(PERSONLT, LAMP, redk)
-    ed = _mix(PERSONED, LAMPCORE, redk)
+    a = ink
+    fade = (1.0 - al) * 0.75
+    dk = _mix(_mix(PERSONDK, LAMP, redk * 0.55), SKYLOW, fade)
+    lt = _mix(_mix(PERSONLT, LAMP, redk), SKYLOW, fade)
+    ed = _mix(_mix(PERSONED, LAMPCORE, redk), SKYLOW, fade * 0.8)
     if flash > 0.02:            # the strike silhouettes everyone against the sky
         dk = _mix(dk, FOREDK, flash * 0.70)
         lt = _mix(lt, FOREDK, flash * 0.55)
@@ -967,7 +971,7 @@ def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped,
         A, lift, duty = 0.155, 0.10, 0.60
         p = (ph + off) % 1.0
         if stopped:
-            fx, fy = (0.085 if li else -0.070), 0.0
+            fx, fy = (0.048 if li else -0.042), 0.0
         elif p < duty:
             fx, fy = A - 2.0 * A * (p / duty), 0.0
         else:
@@ -981,11 +985,13 @@ def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped,
         _seg(out, *(T(fx, fy) + T(fx + 0.062, fy)), cc, la, z + 0.012, 0.038 * sc)
 
     shy = 0.82
-    coat = [T(-0.086, hipy - 0.10), T(0.086, hipy - 0.10),
-            T(0.092 + lean, shy), T(-0.092 + lean, shy)]
+    cw = 0.086 * (0.88 + 0.26 * var)
+    coat = [T(-cw, hipy - 0.10), T(cw, hipy - 0.10),
+            T(cw + 0.006 + lean, shy), T(-cw - 0.006 + lean, shy)]
     _fill(out, coat, dk, a, z + 0.02)
-    _fill(out, [T(0.016, hipy - 0.10), T(0.086, hipy - 0.10),
-                T(0.092 + lean, shy), T(0.020 + lean, shy)], lt, a, z + 0.025)
+    _fill(out, [T(cw * 0.19, hipy - 0.10), T(cw, hipy - 0.10),
+                T(cw + 0.006 + lean, shy), T(cw * 0.23 + lean, shy)],
+          lt, a, z + 0.025)
     _path(out, coat, ed, a * 0.95, z + 0.05, LWC, close=True)
 
     hdx, hdy = lean * 1.15 + 0.012, 0.930
@@ -1012,8 +1018,8 @@ def _person(out, px, gy, sc, ph, umb, al, redk, facing, lean, ink, t, stopped,
     # the weather is a parameter and not a story.
     up = _ss(0.10, 0.30, rain) if umb else 0.0
     if up > 0.02:
-        ucx, ucy = lean * 1.30, 1.100
-        R = 0.310 * (0.40 + 0.60 * up)
+        ucx, ucy = lean * 1.30, 1.075 + 0.075 * var
+        R = 0.310 * (0.40 + 0.60 * up) * (0.86 + 0.28 * var)
         rim = [T(ucx + R * math.cos(math.pi * (1.0 - i / 7.0)),
                  ucy + R * 0.34 * math.sin(math.pi * (1.0 - i / 7.0)))
                for i in range(8)]
@@ -1092,6 +1098,7 @@ def _new(seed):
                         [GROUNDY, GROUNDY + 0.030, GROUNDY + 0.074]),
         'people': [], 'bolts': [], 'coins': [], 'rings': [], 'seen': {},
         'spawn_t': -9.0, 'strike_t': -9.0, 'press': 7, 'press_t': -9.0,
+        'rainon': None, 'join_t': -9.0, 'rejects': 0, 'errs': 0, 'lastout': None,
         'lastt': None, 'labelt': -99.0, 'lastcp': -1, 'rng': rs, 'census': '',
     }
 
@@ -1113,16 +1120,18 @@ def _spawn(S, rs, crowd, t, forced=False):
     gy, sc, al = LANES[lane]
     d = 1.0 if rs.random() < 0.5 else -1.0
     S['people'].append(dict(
-        x=(-1.45 if d > 0 else 1.45), gy=gy, sc=sc, al=al, dir=d,
+        x=(-1.45 if d > 0 else 1.45), gy=gy, al=al, dir=d,
         spd=(0.155 + 0.155 * rs.random()) * sc / 0.38 * (0.85 + 0.45 * crowd),
         umb=rs.random() < 0.78, ph=rs.random(), lane=lane,
+        var=rs.random(), sc=sc * rs.uniform(0.88, 1.13),
         lean=(0.045 + 0.055 * rs.random()) * (1.0 if not forced else 0.5),
-        willstop=False, stopped=False, stopuntil=0.0, gave=False))
+        willstop=False, stopped=False, stopuntil=0.0, gave=False,
+        slot=None, watch=False))
     S['spawn_t'] = t
     return S['people'][-1]
 
 
-def onCook(scriptOp):
+def _frame(scriptOp):
     d = scriptOp.inputs[0] if len(scriptOp.inputs) > 0 else None
     comp = scriptOp.parent()
     par = comp.par
@@ -1196,13 +1205,29 @@ def onCook(scriptOp):
     nkick = _delta(S, d, 'kickcnt')
     naccent = _delta(S, d, 'accentcnt')
 
+    # THE STORY RUNS ON THE MUSIC, NOT ON A TIMER. The schedule only ARMS the
+    # first rain: it opens a window around chapter 4 and the first bass drop
+    # inside it is what actually starts the weather. If the track never drops,
+    # the window closes and it starts anyway, so the story cannot stall.
+    if f < RAINARM0 - 0.04:
+        S['rainon'] = None
+    elif S['rainon'] is None and (f >= RAINARM0
+                                  and ((ndrop > 0) or f >= RAINARM1)):
+        S['rainon'] = t
+    if f >= RAINARM0:
+        rain = rain * (0.0 if S['rainon'] is None
+                       else _ss(0.0, 2.2, t - S['rainon']))
+
     # --- thunder: nothing before chapter 6, because thun is 0 there -------------
     strike = nbolt > 0
     if thun > 0.03:
-        if ndrop and rs.random() < 0.25 + 0.65 * thun:
+        if ndrop and rs.random() < 0.45 + 0.55 * thun:
             strike = True
-        gap = 2.4 + 14.0 * (1.0 - min(1.0, thun))
-        if t - S['strike_t'] > gap and rs.random() < 0.025 * thun:
+        # the fallback exists so a quiet passage is not a calm sky, not so that
+        # the storm can ignore the track: at chapter 6 this is one strike every
+        # four seconds or so, against a drop detector that fires far more often
+        gap = 2.6 + 14.0 * (1.0 - min(1.0, thun))
+        if t - S['strike_t'] > gap and rs.random() < 0.004 * thun:
             strike = True
     if strike:
         S['strike_t'] = t
@@ -1217,8 +1242,39 @@ def onCook(scriptOp):
                            GROUNDY - rs.uniform(0.02, 0.20)])
     del S['rings'][:-7]
 
+    # --- the audience. They gather, and each one arrives on a beat -------------
+    # The thing that was missing is that the STORY had no ear. A crowd that
+    # accumulates on a schedule is a timer with legs; a crowd where every new
+    # person peels off and stops on an accented kick is the track filling the
+    # pavement, and by the last chapters he is playing to a small silent group.
+    watchers = [q for q in S['people'] if q['watch']]
+    want = int(round(float(np.interp(f, ARC_F, ARC_AUD)) * crowdpar))
+    taken = set(q['slot'] for q in S['people'] if q['slot'] is not None)
+    if (len(watchers) < want and (naccent or ndrop)
+            and t - S['join_t'] > JOINGAP):
+        free = [i for i in range(len(AUDSLOT)) if i not in taken]
+        cand = None
+        for q in S['people']:
+            if q['watch'] or q['slot'] is not None or q['gave']:
+                continue
+            if abs(q['x'] - MUSX) < 1.35:
+                cand = q
+                break
+        if free and cand is not None:
+            cand['slot'] = min(free, key=lambda i: abs(
+                (MUSX + AUDSLOT[i][0]) - cand['x']))
+            S['join_t'] = t
+    # and when the arc thins they drift away again, one at a time
+    if len(watchers) > want + 1 and t - S['join_t'] > JOINGAP:
+        q = watchers[-1]
+        q['watch'] = False
+        q['slot'] = None
+        q['gave'] = True
+        q['dir'] = 1.0 if q['x'] > MUSX else -1.0
+        S['join_t'] = t
+
     # --- the crowd --------------------------------------------------------------
-    target = int(round(1.1 + 6.4 * crowd * crowdpar))
+    target = int(round(1.1 + 6.4 * crowd * crowdpar)) + len(watchers)
     if npass:
         for _ in range(npass):
             _spawn(S, rs, crowd, t, forced=True)
@@ -1243,6 +1299,20 @@ def onCook(scriptOp):
 
     dead = []
     for p in S['people']:
+        if p['watch']:
+            continue
+        if p['slot'] is not None:
+            tx = MUSX + AUDSLOT[p['slot']][0]
+            dxs = tx - p['x']
+            if abs(dxs) < 0.022:
+                p['watch'] = True
+                p['x'] = tx
+            else:
+                p['dir'] = 1.0 if dxs > 0 else -1.0
+                step = p['dir'] * p['spd'] * dt
+                p['x'] += step
+                p['ph'] = (p['ph'] + abs(step) / (0.34 * p['sc'])) % 1.0
+            continue
         if p['stopped']:
             if t >= p['stopuntil']:
                 p['stopped'] = False
@@ -1259,7 +1329,7 @@ def onCook(scriptOp):
                 step = p['dir'] * p['spd'] * dt
                 p['x'] += step
                 p['ph'] = (p['ph'] + abs(step) / (0.34 * p['sc'])) % 1.0
-        if p['x'] < -1.60 or p['x'] > 1.60:
+        if not p['watch'] and (p['x'] < -1.60 or p['x'] > 1.60):
             dead.append(p)
     for p in dead:
         S['people'].remove(p)
@@ -1305,10 +1375,15 @@ def onCook(scriptOp):
             redk = math.exp(-(dist / 0.62) ** 2) * 0.72 * lamppar
             if p['stopped']:
                 redk = min(0.85, redk + 0.22)
-            face = -p['dir'] if p['stopped'] else p['dir']
-            lean = 0.0 if p['stopped'] else p['lean'] * (0.6 + 0.9 * wind * 0.3)
+            still = p['stopped'] or p['watch']
+            if p['watch']:
+                face = -1.0 if p['x'] > MUSX else 1.0
+            else:
+                face = -p['dir'] if p['stopped'] else p['dir']
+            lean = 0.0 if still else p['lean'] * (0.6 + 0.9 * wind * 0.3)
             _person(pseg, p['x'], p['gy'], p['sc'], p['ph'], p['umb'],
-                    p['al'], redk, face, lean, ink, t, p['stopped'], rain, flash)
+                    p['al'], redk, face, lean, ink, t, still, rain, flash,
+                    p['var'])
         push(pseg, reflect=True)
 
     fseg = []
@@ -1395,8 +1470,12 @@ def onCook(scriptOp):
     # --- the city, static; the windows are the quietest reactive thing here -----
     st = S['static']
     n = st['n']
+    # Not every window answers, and the ones that do are chosen once at reseed —
+    # a skyline where every light pulses together is a VU meter with windows
+    # painted on it.
     flick = np.where(st['kind'] > 0.5,
-                     0.72 + 0.20 * np.sin(st['fph'] + t * 0.55) + 0.30 * high,
+                     0.58 + 0.16 * np.sin(st['fph'] + t * 0.55) + 0.22 * high
+                     + 0.95 * kickenv * st['wb'],
                      1.0)
     sa2 = st['a'] * ink * flick * (1.0 + 1.6 * flash * (st['kind'] < 0.5))
     blocks.append((np.stack([st['x0'], st['y0'], st['x1'], st['y1'],
@@ -1478,6 +1557,22 @@ def onCook(scriptOp):
         out[9, :n] = np.clip(A[idx, 6], 0.0, 4.0)
         out[10, :n] = np.clip(al[idx], 0.0, 1.0)
 
+    # THE BLACKOUT GUARD. One instance with a non-finite or runaway transform is
+    # a quad that covers the entire frame, and since it is sorted to the front by
+    # whatever garbage landed in its z, it paints the screen out for exactly as
+    # long as the bad value survives. Nothing upstream is allowed to be trusted
+    # here: validate, clamp, count, and carry on.
+    bad = ~np.isfinite(out)
+    nbad = int(bad.sum())
+    if nbad:
+        out = np.where(bad, 0.0, out)
+    over = int(((out[4] > MAXW) | (out[5] > MAXL)).sum())
+    if over:
+        out[4] = np.clip(out[4], 0.0, MAXW)
+        out[5] = np.clip(out[5], 0.0, MAXL)
+    S['rejects'] = S.get('rejects', 0) + nbad + over
+    S['lastout'] = out
+
     scriptOp.clear()
     chans = [scriptOp.appendChan(nm) for nm in CH]
     scriptOp.numSamples = MAXSEG
@@ -1500,16 +1595,51 @@ def onCook(scriptOp):
         par.Windnow.val = wind
         par.Walkers.val = float(len(S['people']))
         par.Labelfade.val = lf
+        par.Rejects.val = float(S.get('rejects', 0))
+        par.Audience.val = float(sum(1 for q in S['people'] if q.get('watch')))
         txt = CHECKPOINTS[cp][1].strip()
         if par.Scaletxt.eval() != txt:
             par.Scaletxt.val = txt
     except Exception:
         pass
 
-    S['census'] = ('f %.3f | rain %.2f wind %.2f thun %.2f | people %d '
-                   '| quads %d/%d | bolts %d | static %d'
-                   % (f, rain, wind, thun, len(S['people']), n, MAXSEG,
-                      len(S['bolts']), st['n']))
+    S['census'] = ('f %.3f | rain %.2f wind %.2f thun %.2f | people %d (%d watching) '
+                   '| quads %d/%d | bolts %d | rejects %d'
+                   % (f, rain, wind, thun, len(S['people']),
+                      sum(1 for q in S['people'] if q.get('watch')),
+                      n, MAXSEG, len(S['bolts']), S.get('rejects', 0)))
+    return
+
+
+def onCook(scriptOp):
+    """Publish a frame, and NEVER publish a broken one.
+
+    An exception in here used to take the Script CHOP out entirely; what the room
+    sees when that happens is the screen going black mid-set. Re-publishing the
+    last good frame instead turns the worst case from a blackout into a single
+    dropped frame that nobody can see, and prints the traceback once so it can
+    actually be fixed.
+    """
+    try:
+        _frame(scriptOp)
+        return
+    except Exception:
+        import traceback
+        S = _S['S']
+        if isinstance(S, dict):
+            S['errs'] = S.get('errs', 0) + 1
+            if S['errs'] <= 3:
+                print('[monsoon engine] frame failed:\n' + traceback.format_exc())
+            prev = S.get('lastout')
+        else:
+            prev = None
+        if prev is None:
+            raise
+        scriptOp.clear()
+        chans = [scriptOp.appendChan(nm) for nm in CH]
+        scriptOp.numSamples = MAXSEG
+        for ii, c in enumerate(chans):
+            c.vals = prev[ii].tolist()
     return
 '''
 eng_src = C(textDAT, 'engine_src', 1780, 980)
@@ -1524,7 +1654,7 @@ eng_src.text = hdr(
     MSCALE=MSCALE, SEED0=20260918,
     CH=('tx', 'ty', 'tz', 'rz', 'sx', 'sy', 'sz', 'r', 'g', 'b', 'a'),
     SKYBASE=GROUNDY + 0.150,
-    LWCHAR=LWCHAR, LWBG=LWBG,
+    LWCHAR=LWCHAR, LWBG=LWBG, SKYLOW=PAL['SKYLOW'],
     RAIN=PAL['RAIN'], RAINFAR=PAL['RAINFAR'], ROAD=PAL['ROAD'],
     KERB=PAL['KERB'], FOREDK=PAL['FOREDK'], WINDOW=PAL['WINDOW'],
     BLDGFAR=PAL['BLDGFAR'], BLDGDK=PAL['BLDGDK'], BLDGLT=PAL['BLDGLT'],
@@ -1538,9 +1668,19 @@ eng_src.text = hdr(
     # the shader, and these are only the ones that must fall in front of people.
     NRAIN=150, NSPL=44, NBAND=6, RINGLIFE=1.6,
     # gy, scale, alpha — further away is higher on screen, smaller, and dimmer
-    LANES=((GROUNDY + 0.082, 0.265, 0.62), (GROUNDY + 0.030, 0.360, 0.86),
+    LANES=((GROUNDY + 0.082, 0.265, 0.74), (GROUNDY + 0.030, 0.360, 0.88),
            (GROUNDY - 0.074, 0.505, 1.00)),
     BOLTLIFE=0.24, STOPDWELL=7.5, LISTEN0=0.79, LISTEN1=0.90,
+    # the window the first rain is armed in; the first bass drop inside it is
+    # what actually starts the weather
+    RAINARM0=0.360, RAINARM1=0.430,
+    JOINGAP=1.6,
+    # where they stand to watch, as offsets from him, filled nearest-first
+    AUDSLOT=((0.44, 1), (-0.42, 1), (0.64, 0), (-0.62, 0), (0.88, 1),
+             (-0.86, 1), (0.30, 0), (-0.28, 0), (1.12, 2), (-1.10, 2)),
+    # no legitimate quad is wider than a building is tall, or longer than the
+    # road band; anything past these is a runaway and is clamped, not drawn
+    MAXW=0.70, MAXL=3.20,
     # THE WEATHER IS AN ARC, NOT A LEVEL. Three dry chapters with a rising wind,
     # the first drops at chapter 4, and the sky does not open until chapter 6 —
     # thunder is exactly zero before then, so it cannot leak early. Endpoints
@@ -1550,6 +1690,9 @@ eng_src.text = hdr(
     ARC_CROWD=(0.55, 0.95, 0.850, 0.700, 0.600, 0.480, 0.400, 0.330, 0.470, 0.55),
     ARC_THUN=(0.00, 0.00, 0.000, 0.000, 0.000, 0.050, 1.000, 0.420, 0.100, 0.00),
     ARC_WIND=(0.18, 0.26, 0.720, 0.620, 0.580, 0.620, 0.900, 0.540, 0.300, 0.18),
+    # how many people are standing watching him. They accumulate through the
+    # piece and thin out at the end, and every arrival lands on a beat.
+    ARC_AUD=(0.00, 0.00, 0.400, 1.000, 1.800, 2.600, 4.000, 5.000, 2.800, 0.00),
     LINEW=1.0, CULLX=1.34, CULLY=0.74, MINLEN=0.0012,
 ) + ENGINE_BODY
 
@@ -1695,6 +1838,15 @@ void main() {
     // the purple the lightning leaves in the air takes two seconds to go
     col += vec3(0.115, 0.045, 0.165) * after * (0.35 + 0.75 * (1.0 - above));
     col = mix(col, CFLASH * 0.58, flash * 0.46);
+
+    // THE SKY ANSWERS THE BEAT. A broad, soft lift across the whole upper field
+    // plus a tighter bloom sitting on the horizon. It is the largest area in the
+    // frame, so it carries the track at an amplitude nothing else can: small
+    // enough per-kick to stay weather, big enough to be felt from the back.
+    float beat = uD.z;
+    col += vec3(0.150, 0.082, 0.245) * beat
+           * (0.28 + 0.72 * pow(above, 0.55)) * uB.w;
+    col += vec3(0.105, 0.062, 0.185) * beat * exp(-abs(uv.y - hz) * 2.6);
 
     // --- the street: a film, so it mirrors the air and shimmers --------------
     float below = clamp((hz - uv.y) / max(hz, 0.001), 0.0, 1.0);

@@ -5,8 +5,12 @@ who walks past without stopping.
 
 A fixed camera on one corner. The first third is dry: he is already playing, the
 evening crowd is already going home, and the wind gets up. Then it starts, and by the
-time the sky opens he has been out in it for two chapters and has not moved. Once in
-a while somebody stops.
+time the sky opens he has been out in it for two chapters and has not moved.
+
+**And one by one, people stop walking.** Each new listener peels off the pavement on
+an accented kick and takes a place at his side, so the crowd that gathers is built by
+the track rather than by a timer. By chapter 7 he is playing to a small silent group
+in the rain; by chapter 8 they have gone.
 
 Build:
 
@@ -64,16 +68,16 @@ not the weather.
 
 ## The weather is an arc, not a level
 
-| # | chapter | weather |
-|---|---|---|
-| 1 | The Street | **dry**, still, a few people |
-| 2 | Evening Crowd | **dry**, the pavement is busy |
-| 3 | The Wind Gets Up | **dry**, wind at 0.72 — the only warning you get |
-| 4 | It Starts to Rain | first drops; umbrellas start going up |
-| 5 | Steady Rain | a drizzle that has settled in |
-| 6 | **Thunder** | the sky opens; heaviest rain of the piece |
-| 7 | Someone Stops | it eases; the odds of a listener rise sharply |
-| 8 | It Eases | last drops, purple afterlight, back to dry |
+| # | chapter | weather | watching |
+|---|---|---|---|
+| 1 | The Street | **dry**, still, a few people | 0 |
+| 2 | Evening Crowd | **dry**, the pavement is busy | 0 |
+| 3 | The Wind Gets Up | **dry**, wind at 0.72 — the only warning | 0–1 |
+| 4 | It Starts to Rain | first drops; umbrellas go up | 1–2 |
+| 5 | Steady Rain | a drizzle that has settled in | 2–4 |
+| 6 | **Thunder** | the sky opens; heaviest rain | 4 |
+| 7 | Someone Stops | it eases | **5** |
+| 8 | It Eases | last drops, purple afterlight | drains to 0 |
 
 `ARC_THUN` is **exactly zero before chapter 6**, so lightning cannot leak early no
 matter what the bass does. Rain is 0.00 for the first two chapters and 0.02 in the
@@ -93,17 +97,40 @@ music drives instead is everything that is *alive*:
 | signal | drives |
 |---|---|
 | tempo | **the bellows** — he pumps once every two beats, phase-locked to the grid |
-| accented kick | **a ring on a puddle**, one per accent, low and small |
-| kick | the lamp flicker, his shoulders, the line weight |
+| accented kick | **a new listener stops**; a ring on a puddle |
+| kick | **the sky glows**; ~45% of the windows shine; the lamp, his shoulders |
+| bass **drop** | **starts the rain** (chapter 4 window); fires the lightning (from 6) |
 | energy | the drone bands rising off the harmonium |
 | highs | **the lit windows** flicker; rain landing on his head and shoulders |
 | bass | wind, and the haze on the road |
-| bass **drop** | from chapter 6 only: a fork of lightning, a 55 ms flash, 1.4 s of violet |
 
 **The flash and the afterglow are two different clocks.** The strike is gone in a
 tenth of a second; the violet it leaves in the air takes a second and a half. One
 envelope cannot be both, and using one is what makes stage lightning look like a
 dimmer.
+
+### The story itself runs on the music
+
+Decoration reacting to audio is not the same as a story reacting to audio, and the
+first pass only had the former. Three of the piece's actual events are now the
+track's to fire:
+
+- **The rain starts on a bass drop.** The schedule only *arms* a window around
+  chapter 4; the first drop inside it is what opens the weather, and it ramps in over
+  2.2 s. If the track never drops the window closes and it starts anyway, so the
+  story cannot stall.
+- **Every listener arrives on a beat.** A crowd that accumulates on a schedule is a
+  timer with legs. Each new watcher peels off on an accented kick or a drop, walks to
+  a free place at his side, and stays.
+- **Nearly every lightning strike is a drop.** The fallback timer exists so a quiet
+  passage is not a calm sky, but at chapter 6 it is one strike per four seconds
+  against a drop detector that fires far more often.
+
+**The sky answers the beat** — a broad lift across the whole upper field plus a
+tighter bloom on the horizon. It is the largest area in the frame, so it carries the
+track at an amplitude nothing else can. **The windows shine on it too**, but only
+about 45% of them, chosen once at reseed: a skyline where every light pulses together
+is a VU meter with windows painted on it.
 
 ## Built for a switch, and measured
 
@@ -114,8 +141,8 @@ One tox among sixteen, so what it costs when **nobody is looking** mattered more
 | TOP textures | 87.9 MB / 15 TOPs | **39.1 MB / 7 TOPs** |
 | ×16 scenes resident | 1.37 GB | **0.61 GB** |
 | CPU — all persistent numpy | 1.1 MB | **0.016 MB** (+0.25 MB pool) |
-| Engine, headless mean | 1.33 ms | **0.80 ms** |
-| Live fps, rendering | 60.0 | **60.0** (1151 frames / 19.2 s) |
+| Engine, headless mean | 1.33 ms | **0.95 ms** |
+| Live fps, rendering | 60.0 | **60.0** (1508 frames / 25.1 s, 6 watching) |
 | Off-screen, viewers off | 0 ops | **1 op** (the timer) |
 
 A **drizzle is 150 streaks, not thousands.** The volume of the rain — the sheets, the
@@ -135,6 +162,31 @@ nobody can see.
 **Operational note:** with the network editor displaying the tox's internals, TD pulls
 the node thumbnails and 30 of 54 ops cook at ~5 Hz even unselected. Measured. Patch
 with the editor out of the tox, or in Perform mode.
+
+## The screen must never go black
+
+A blackout mid-set is the worst failure this scene has, so it is now guarded in two
+places rather than debugged once:
+
+- **Every frame is validated before it is published.** One instance with a
+  non-finite or runaway transform is a quad that covers the entire frame, and
+  whatever garbage landed in its `z` sorts it to the front. Non-finite values are
+  zeroed and width/length are clamped to `MAXW`/`MAXL` — no legitimate quad is wider
+  than a building is tall or longer than the road band. The count is on the
+  `Bad Quads Clamped` readout.
+- **An exception re-publishes the last good frame instead of dying.** An error inside
+  `onCook` used to take the Script CHOP out entirely, and what the room sees when
+  that happens is the screen going black. The worst case is now one dropped frame
+  nobody can see, plus a traceback printed once. This guard earned itself during
+  development: it caught a real `UnboundLocalError` and the scene kept running.
+
+**Honest status: the reported blackout was not reproduced.** A two-minute soak across
+all eight chapters — including the thunder chapter, with the audience accumulating —
+held output luminance between 0.17 and 0.23 with **zero clamped quads and zero engine
+errors**. The label TOP was ruled out directly (alpha mean 0.0005; only glyph
+pixels). So the guard is insurance, not a confirmed fix. If it recurs, read
+`Bad Quads Clamped` — if it is climbing, the cause is geometry; if it stays at zero,
+the cause is downstream of the engine.
 
 ## What went wrong, and what it cost
 
@@ -190,5 +242,8 @@ reading that back is what found all three.
   it, so they stayed. Dropping the null saves 7 MB per scene, 112 MB across the rig.
 - The walk cycle is still stiff — the legs are two quads and a foot, with no ankle
   and no hip rotation. It reads at a distance and does not bear a close look.
+- Chapters 1–3 are dry, so a switch landing there gets a still street rather than
+  rain. That is the intended arc, but it does cost the "cut to it at any moment"
+  property the first version had.
 - Not yet done: an uninterrupted full-length pass at the default 240 s with a real
   set playing, and a soak with all sixteen scenes loaded.
