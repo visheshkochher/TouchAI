@@ -129,6 +129,22 @@ def soft(o, **params):
     return o
 
 
+# EVERY INTERNAL REFERENCE IS RELATIVE, AND THAT IS NOT A STYLE CHOICE.
+#
+# Writing `tempo.par.callbacks = tempo_src.path` stores the ABSOLUTE path
+# '/project1/bayou/tempo_src'. The scene still works — right up to the moment
+# anyone duplicates the COMP or drops it in as a second .tox. The copy's Script
+# CHOPs go on pointing at the ORIGINAL's DATs, so the two share state; and the
+# moment the original is rebuilt or deleted, every one of those references dangles
+# and the copy's director simply stops running. Observed in a live rig: a copy
+# named `bayou1` was the one wired into the performance switch, its director sat
+# at musical 0.000 for the whole set, and the scene rendered black with nothing in
+# the error list but two 'Invalid path' warnings.
+#
+# Relative names resolve against the operator's own parent, so a copy wires itself
+# up to its own children and a .tox is genuinely self-contained.
+
+
 def hdr(**kw):
     return ''.join('%s = %r\n' % (k, v) for k, v in sorted(kw.items())) + '\n'
 
@@ -433,7 +449,7 @@ tempo_src.text = hdr(
 ) + TEMPO_BODY
 
 tempo = C(scriptCHOP, 'tempo', 1940, 1240)
-tempo.par.callbacks = tempo_src.path
+tempo.par.callbacks = tempo_src.name
 af_kick = C(audiofilterCHOP, 'af_kick', 660, 1020, filter='lowpass')
 soft(af_kick, cutofflog=math.log10(140.0), cutofffrequency=140.0)
 W(gain, af_kick)
@@ -616,7 +632,7 @@ dir_src.text = hdr(CLOCKLEN=CLOCKLEN, PEAKDECAY=0.9988, PEAKFLOOR=0.05,
                    BEATLOCK=0.22, ACCENT=0.32) + DIRECTOR_BODY
 
 director = C(scriptCHOP, 'director', 1940, 1120)
-director.par.callbacks = dir_src.path
+director.par.callbacks = dir_src.name
 W(timer, director, 0)
 W(null_audio, director, 1)
 W(tempo, director, 2)
@@ -2061,7 +2077,7 @@ eng_src.text = hdr(
 ) + ENGINE_BODY
 
 engine = C(scriptCHOP, 'engine', 1940, 980)
-engine.par.callbacks = eng_src.path
+engine.par.callbacks = eng_src.name
 W(director, engine, 0)
 
 
@@ -2083,7 +2099,7 @@ def onCook(scriptOp):
 shape_src = C(textDAT, 'shape_src', 1300, 200)
 shape_src.text = SHAPE_BODY
 unit_line = C(scriptSOP, 'unit_line', 1440, 200)
-unit_line.par.callbacks = shape_src.path
+unit_line.par.callbacks = shape_src.name
 
 mat_line = C(lineMAT, 'mat_line', 1600, 200)
 soft(mat_line, widthnear=1.40, widthfar=1.40, widthaffectedbyfov=False,
@@ -2097,12 +2113,12 @@ _stale = g_lines.op('torus1')
 if _stale:
     _stale.destroy()
 _sel = g_lines.create(selectSOP, 'shape')
-_sel.par.sop = unit_line.path
+_sel.par.sop = '../' + unit_line.name
 _sel.render = True
 _sel.display = True
-g_lines.par.material = mat_line.path
+g_lines.par.material = mat_line.name
 g_lines.par.instancing = True
-g_lines.par.instanceop = engine.path
+g_lines.par.instanceop = engine.name
 for _p, _v in (('instancetx', 'tx'), ('instancety', 'ty'), ('instancetz', 'tz'),
                ('instancerz', 'rz'), ('instancesx', 'sx'), ('instancesy', 'sy'),
                ('instancesz', 'sz')):
@@ -2117,8 +2133,8 @@ soft(cam, orthowidth=ORTHOW, near=0.1, far=20.0)
 
 render_lines = C(renderTOP, 'render_lines', 1940, 200)
 res(render_lines)
-render_lines.par.camera = cam.path
-render_lines.par.geometry = g_lines.path
+render_lines.par.camera = cam.name
+render_lines.par.geometry = g_lines.name
 render_lines.par.bgcolora = 0.0
 soft(render_lines, antialias='msaa4x', transparency='sortedblending')
 
@@ -2193,7 +2209,7 @@ void main() {
     fragColor = TDOutputSwizzle(vec4(max(col, vec3(0.0)), 1.0));
 }
 '''
-void.par.pixeldat = void_pix.path
+void.par.pixeldat = void_pix.name
 void.par.vec = 2
 void.par.vec0name = 'uP'
 void.par.vec0valuex.expr = D('energy')
@@ -2256,7 +2272,7 @@ void main() {
     fragColor = TDOutputSwizzle(vec4(r, g.g, b, g.a));
 }
 '''
-shock.par.pixeldat = shock_pix.path
+shock.par.pixeldat = shock_pix.name
 shock.par.vec = 1
 shock.par.vec0name = 'uS'
 shock.par.vec0valuex.expr = 'parent().par.Shock'
@@ -2355,7 +2371,7 @@ def onPulse(par):
 
 pexec = C(parameterexecuteDAT, 'checkpoint_exec', 2100, 1000)
 pexec.text = hdr(CHECKPOINTS=CHECKPOINTS) + PEXEC_BODY
-pexec.par.op = s.path
+pexec.par.op = '..'
 soft(pexec, pars='Look Startle Reseed Restart Nextcp Prevcp '
      + ' '.join('Go' + cp[0] for cp in CHECKPOINTS),
      valuechange=False, onpulse=True)
@@ -2395,7 +2411,7 @@ keyin.par.keys = '1 2 3 4 5 6 7 8 9 0 l g n'
 kcb = keyin.par.callbacks.eval()
 if kcb is None:
     kcb = C(textDAT, 'key_pad_callbacks', 1780, 620)
-    keyin.par.callbacks = kcb.path
+    keyin.par.callbacks = kcb.name
 kcb.nodeX, kcb.nodeY = 1780, 620
 kcb.text = hdr(CHECKPOINTS=CHECKPOINTS) + KEY_BODY
 
@@ -2413,7 +2429,7 @@ kcb.text = hdr(CHECKPOINTS=CHECKPOINTS) + KEY_BODY
 # back to it rather than jumping.
 
 s.par.display = True
-s.par.opviewer = final_out.path
+s.par.opviewer = final_out.name
 s.store('pending', [])
 
 timer.par.initialize.pulse()
