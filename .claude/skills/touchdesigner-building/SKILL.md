@@ -19,6 +19,9 @@ Every TD task follows this cycle:
 5. **Refine** — `edit` for shader tweaks, `set` for param changes (validates names, handles expressions)
 6. Repeat 4-5 until it looks right; before declaring done, measure real fps (perform
    mode for headline numbers) and run the motion check on anything that should animate
+7. **Long-run audit** — no per-frame growth anywhere (see "Nothing may grow per frame"
+   below), then a quiet RSS slope over 7+ minutes with the story looping. Record the
+   number in the README.
 
 ## Hard Rules
 
@@ -185,6 +188,28 @@ textures (particle positions, timestamps). Details in [reference.md](reference.m
 If `app.build` ≥ 2025.30k, the GPU **POP** operator family exists — prefer it over SOPs
 for particles, point clouds, and anything with many points. Check with
 `docs(type='list_types', family='POP')`; overview + gotchas in [reference.md](reference.md).
+
+### Nothing may grow per frame (scenes run for hours)
+
+Assume every scene will run unattended all night. Every per-frame code path must be
+bounded:
+
+- **Script OPs: build channels, rows or points once, then only write values.**
+  `scriptOp.clear()` + `appendChan()` in every `onCook` leaks native memory inside
+  TouchDesigner. It was measured at ~2 MB/min (~760 MB over six hours) while Python's
+  object count and `gpuMemory` both stayed flat. Track "built" in Python state, because
+  `numChans` cannot be read inside a cook. The pattern is in
+  [debugging.md](debugging.md).
+- **Every list that gains entries** (particles, events, history) gets a hard length cap
+  **and** an age expiry.
+- **Every integrated phase** (flow, travel, spin, a shader clock) is wrapped or reset
+  at a loop seam. Feed shaders story time, never raw `absTime`.
+- **An unattended story loops** through a fade, rather than clamping on its last frame.
+
+Before calling a scene done, and when auditing an existing one, run the **long-run
+memory audit** in [debugging.md](debugging.md): a grep for appends, then a quiet RSS
+slope measured from outside TouchDesigner, then a bisection if it grows. Python's
+object count alone cannot see the worst leak.
 
 ### Prefer CHOP networks over per-frame Python
 
