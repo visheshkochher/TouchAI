@@ -38,6 +38,18 @@ TouchDesigner
 5. Before declaring a scene done, verify real fps (frame-delta over wall clock) fits the
    16.6ms/60fps budget — the triage workflow is in the skill's `debugging.md`, and the
    "quality per unit of compute" ladder in `patterns.md` decides where to spend it.
+6. **Then audit it for long runs.** Scenes here run unattended for hours, so nothing
+   may grow per frame:
+   - Script OPs build their channels, rows or points **once** and then only write
+     values. `clear()` + `appendChan()` every cook leaks ~2 MB/min of native memory.
+   - Every list that gains entries is length-capped and aged out.
+   - Every integrated phase wraps or resets at a loop seam.
+   - The story loops rather than clamping.
+
+   Then measure TD's process RSS from outside (no bridge calls during the window) over
+   7+ minutes with the story looping. A flat Python object count proves nothing on its
+   own. The procedure is "The long-run memory audit" in `debugging.md`. Record the
+   measured slope in the scene's README.
 
 ## Safety rules
 
@@ -46,6 +58,12 @@ TouchDesigner
   `work/` directory), not originals.
 - Prefer the structured tools (`create`/`wire`/`set`) when they suffice; `run` is the
   escape hatch.
+- **Audit existing projects for per-frame growth whenever you touch them.** When editing
+  or studying any scene, `.tox` or reference `.toe`, grep its scripts for
+  `append`/`appendChan`/`appendRow`/`appendPoint`/`clear()`/`store(` and unbounded `+=`
+  phases, and fix what fails the long-run rules above. As of this writing every scene
+  in `scenes/` except `homestead` and `voyage` still rebuilds its Script CHOP channels
+  every frame.
 - Anything worth keeping must exist as code or `.tox` in the repo, not only inside a
   `.toe`. Save reusable components with `.save()` as `.tox` files (give each a short
   README: what it does, custom parameters, inputs/outputs), and keep scenes

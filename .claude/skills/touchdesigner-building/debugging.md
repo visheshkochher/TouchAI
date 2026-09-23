@@ -525,10 +525,64 @@ dropped frames deep into a long session and never in a two-minute test.
   channel to `chan1..chanN`**. That silently breaks instancing: the geometry COMP looks
   up `tx` by name, fails, and emits a *warning*, not an error.
 - Build the channel layout once and only rebuild it when the sample count changes.
+  **This is a memory leak, not just a speed tip** (see the next section).
 
 Same discipline for the per-frame maths: preallocate every working array in the state
 dict and use `out=` on every numpy call. A naive publish step allocated ~20 arrays of
 24,000 doubles per frame.
+
+## Script CHOP `clear()` + `appendChan()` every frame LEAKS native memory
+
+Verified on 2025.33230. Almost every Script CHOP in this repo started `onCook` with
+`scriptOp.clear()` and re-appended its channels. That leaks memory inside
+TouchDesigner itself: the growth is in process RSS, while Python's
+`len(gc.get_objects())` and the scene's `gpuMemory` both stay flat. A soak test that
+only watches those two misses it.
+
+Bisected on the `voyage` scene with RSS slopes over 150–240 s windows, measured from
+outside TouchDesigner with no bridge calls during the window:
+
+| state | RSS growth |
+|---|---|
+| scene COMP `allowCooking = False` | 0.04 MB/min |
+| engine (11 ch × 12,000 samples) bypassed; director + tempo still rebuilding 1-sample channels | 0.62 MB/min |
+| everything on | 2.12 MB/min (≈ 760 MB over a 6-hour night) |
+| engine re-publishing a frozen frame with clear/append (no Python work at all) | 5.05 MB/min |
+| same frozen frame, channels **reused** (no clear/append) | 0.61 MB/min |
+| all three Script CHOPs build once, then only write values | **0.02 MB/min** |
+
+Per-frame parameter writes (`par.X.val = ...`, ~43 per frame) were tested and are
+**not** the cause: turning them off changed nothing.
+
+The fix is to build once, and after that only write values:
+
+```python
+_PUB = {'built': False}
+
+def _publish(scriptOp, block):              # block: (numChans, numSamples) float32
+    for attempt in (0, 1):
+        try:
+            if not _PUB['built']:
+                scriptOp.clear()
+                for nm in CH:
+                    scriptOp.appendChan(nm)
+                scriptOp.numSamples = N
+                _PUB['built'] = True
+            for i in range(len(CH)):
+                scriptOp[i].copyNumpyArray(block[i])
+            return
+        except Exception:
+            _PUB['built'] = False           # channels lost: rebuild and retry once
+```
+
+- **`scriptOp.numChans` cannot be read inside `onCook`.** It raises "numChans is
+  unavailable for this CHOP while it is cooking", so "are the channels built?" has to
+  be tracked in Python state. That state resets whenever the callbacks DAT reloads,
+  which is exactly when a rebuild is wanted anyway.
+- **A Script CHOP keeps its channels between cooks** when you don't clear it, so writing
+  values into the existing ones is enough.
+- Fixed in `homestead` and `voyage`. Every other scene in `scenes/` still uses the
+  leaking idiom.
 
 ## Long-run failure modes are invisible in short tests — look for them on purpose
 
@@ -540,7 +594,11 @@ distributions, not by looking.
 
 Worth a standing check for anything that will run for a whole set:
 
-- `len(gc.get_objects())` sampled over minutes — should be flat.
+- `len(gc.get_objects())` sampled over minutes — should be flat. **Necessary, not
+  sufficient**: the worst leak found so far (Script CHOP `clear()`/`appendChan()` every
+  frame, see above) grows TouchDesigner's native memory while the Python object count
+  and the scene's `gpuMemory` both stay perfectly flat. Only the process RSS shows it,
+  so run the audit below as well.
 - Every accumulating list bounded **twice**, by age *and* by length.
 - Every quantity meant to be permanent given a decay long enough to outlast one track
   and short enough to not saturate over a set.
@@ -549,6 +607,53 @@ Worth a standing check for anything that will run for a whole set:
 - Real fps from frame deltas, plus `op.cookTime` sampled repeatedly: report the
   **median and p90**, because a single burst (a one-frame effect) hides in an average
   and is exactly what will stutter on stage.
+
+## The long-run memory audit (do this for every scene, new or old)
+
+Anything that runs unattended — an installation, a club night, a 6-hour loop — must
+pass this before it is called done. It takes about 15 minutes, most of it waiting.
+
+**1. Code review: every per-frame append must be bounded or build-once.** Grep the
+scene for `append`, `appendChan`, `appendRow`, `appendCol`, `appendPoint`,
+`appendPoly`, `store(`, `clear()` and `+=`. Each hit must fall into one of three
+categories, and the code should say which:
+
+| pattern | rule |
+|---|---|
+| Script OP `clear()` + `appendChan`/`appendRow`/`appendPoint` in `onCook` | **Build once, then only write values** (the leak above). Rebuild only when the layout really changes, tracked in Python state. For a SOP whose geometry is static, generate it once and let it stop cooking. |
+| Python list/dict that gains entries per frame or per event (particles, rings, trails, history buffers) | **Hard cap by length** (`del L[:-N]`) **and** expire by age. Filtering by age alone is not a cap: a burst of events can outrun it. |
+| Integrated phase or clock (`phase += dt * speed`, travel, cloud drift, a rawtime uniform) | **Wrap or reset it.** Keep angles modulo 2π. Reset flows at a loop seam, inside a fade. A shader samples noise at these in 32-bit float, so after hours they go visibly coarse. Feed shaders story time, not `absTime` or raw timer time. |
+| Table DAT `appendRow` for logging, and `comp.store()` of growing structures | Cap, or rotate into a fixed-size ring. |
+
+The story itself should **loop** on an unattended run (fade through black at the seam
+and reset every phase there), not clamp on its last frame for hours.
+
+**2. Measure process RSS from outside TouchDesigner, quietly.** Every bridge call
+allocates inside TouchDesigner, so none may run during the measurement window:
+
+```bash
+PID=$(pgrep -f "MacOS/TouchDesigner" | head -1)
+for i in $(seq 0 7); do ps -o rss= -p $PID | awk '{printf "%.1f MB\n",$1/1024}'; sleep 60; done
+```
+
+- Shorten the story (e.g. `Storylen = 45`) so it loops several times inside the
+  window, which exercises every chapter and the loop seam.
+- **Wait a few minutes after a rebuild before timing.** Memory settles upward at first.
+  A 4-minute window straight after a rebuild read 1.59 MB/min on a scene that measured
+  0.14 MB/min over the following 7 minutes.
+- **Judge the trend, not two points.** Short windows are noisy (±0.8 MB/min was seen
+  between 150-second windows in one session). A real leak is a straight line minute
+  after minute: the leaking `voyage` build climbed 1554 → 1572 MB in exactly 8 steps of
+  ~2.25 MB. Healthy is ≲ 0.2 MB/min over 7+ minutes.
+
+**3. If it grows, bisect by switching things off.** Measure the slope with the scene
+COMP's `allowCooking = False` (the floor), then with one suspect at a time bypassed
+(`op.bypass = True`), then a suspect reduced to its bare publish (re-sending a frozen
+frame). The table in the previous section is a worked example: it found the leak in
+four measurements, and ruled out the obvious suspect (per-frame `par.X.val` writes)
+along the way.
+
+Record the final measured slope in the scene's README. "Should be fine" is not a result.
 
 ## Verify a patch matched before writing the file
 
