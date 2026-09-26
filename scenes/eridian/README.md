@@ -124,9 +124,18 @@ chance of a new view. A drop picks a new one 60% of the time.
   1000 s.
 - **No story that could end.**
 
-**Long-run memory audit: pending.** Per the repo rule, the soak is the final
-iteration and runs only after the visual style is approved. On this Mac, trend
-`footprint`, not RSS: see `debugging.md`.
+**Long-run memory audit: passed.** It was run as the final iteration, once the look
+was approved:
+
+- The phrase was set to 8 beats with change chance 1.0, so the view changed every
+  few seconds: 2,587 beats of views, drops, chords and breakdowns in the window.
+- After warm-up, TouchDesigner's physical footprint (not RSS; see `debugging.md`)
+  was sampled once a minute over two 8-minute windows:
+  - **The second window read 1953 → 1953 MB: 0 MB/min.**
+  - The first held at 1933–1934 MB, then stepped once by 19 MB in the same minute
+    macOS compressed TouchDesigner. RSS fell from 1543 to 833 MB that minute. It
+    was flat again after the step.
+- The engine cooked 60 times a second throughout, with zero errors.
 
 ## What went wrong on the way
 
