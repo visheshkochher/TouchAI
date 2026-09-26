@@ -224,9 +224,20 @@ template scales it (256 gives 65k).
 - **Every phase wraps.** The clock is modulo 1000 s and the camera angle is wrapped.
   The story loops through the year.
 
-**Long-run memory audit: pending.** Per the repo rule, the soak is the final
-iteration, run once the visual style is approved. On this Mac, trend `footprint`,
-not RSS (see `debugging.md`).
+**Long-run memory audit: passed.** It was run as the final iteration, once the look
+was approved:
+
+- The year was shortened to 45 s so it looped through every season and the loop
+  seam. The attended year was switched every 20 s by a temporary expression, so the
+  focus change and its sweep were exercised without any bridge calls.
+- After warm-up, TouchDesigner's physical footprint (not RSS; see `debugging.md`) was
+  read once a minute over two 8-minute windows:
+  - The first window alternated between two plateaus, about 2178 MB and about
+    2212 MB. It went up, then back down, then up again. That is a bounded
+    allocation that gets released, not growth.
+  - **The second window read 2213 → 2213 MB: 0 MB/min.** RSS moved 0.09 MB/min.
+- The simulation and the engine cooked 59.9 times a second across the whole
+  20-minute session.
 
 ## What went wrong on the way
 
