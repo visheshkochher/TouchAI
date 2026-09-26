@@ -379,6 +379,17 @@ should be measured in perform mode — editor-mode fps understates real performa
 sometimes by a lot. Don't leave perform mode on during building (observe of
 intermediate ops still works, but the user loses the editor).
 
+**But first prove the scene is actually cooking** (verified on 2025.33230, `reckoning`).
+Perform mode shows `/project1`'s panel. A scene COMP whose output is only its
+`opviewer`, or an Out TOP nothing displays, is **not pulled** there, and TouchDesigner
+is pull-based. In one session the scene engine's `totalCooks` did not move at all in
+perform mode, even with the COMP's panel background TOP (`par.top`) set to its output.
+So a "locked 60 fps" measured that way was timing an idle project. Always read an
+endpoint's `totalCooks` before and after the measurement window: it must advance at
+about 60 per second. If it doesn't, measure in the editor with the COMP visible
+instead, where the same check passed (305 cooks in 5 s). An honest editor-mode number
+beats a flattering one from a project that wasn't rendering.
+
 ## Video Codecs (moviefilein playback)
 
 For image sequences/loops played back as textures: **HAP Q** decodes almost free (GPU-native layout, minimal CPU), at the cost of big files and 8-bit banding on soft gradients; **NotchLC** is higher quality (ProRes-4444-class, 10/12-bit) with moderate GPU cost; H.264/H.265 are small but seek badly and decode on CPU unless hw-accelerated ([codec guide](https://interactiveimmersive.io/blog/touchdesigner-lessons/codecs-for-touchdesigner-explained/)). On non-commercial licenses GPU H.264/HEVC *encode* is blocked (check `MACHINE.md` for this machine's license — record recipe in debugging.md); HAP encode via moviefileoutTOP works regardless and is the right target format for loops that will be played back in TD.

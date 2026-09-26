@@ -40,7 +40,8 @@
 | GPU-particle init loses ~3/4 of its volume (one quadrant only) | Init noise texture left at 8-bit — negative positions clipped to 0 | 32-bit float on the init texture (and amp 1 / offset 0 for signed range) |
 | All GPU/POP particles die and respawn in sync (whole system blinks) | Constant birth alpha — every particle's life started equal | Seed the init texture's alpha with random noise so births de-sync |
 | POP feedback loop's point count (and GPU memory) grows every frame | merge loop with no cap | Set the feedbackPOP's memory/point limit; add a distance- or age-based deletePOP in the loop |
-| Whole net looks right but output fps quoted is low | Measuring in editor mode — network UI costs GPU/CPU | `ui.performMode = True`, re-measure, then back to `False` (reference.md) |
+| Whole net looks right but output fps quoted is low | Measuring in editor mode — network UI costs GPU/CPU | `ui.performMode = True`, re-measure, then back to `False` (reference.md) — **but check the scene's `totalCooks` advances there first** |
+| fps is a perfect 60 and particles/fire look sparse in snapshots | Nothing is pulling the scene: in perform mode (or with its COMP not on screen) the chain isn't cooking, so you are timing an idle project and each snapshot is a single cook | Read an endpoint's `totalCooks` before and after the window; it must advance ~60/s. Measure in the editor with the COMP visible if perform mode doesn't pull it (reference.md "Perform mode") |
 
 ## Automated verification (cheap checks to run every build pass)
 
