@@ -199,8 +199,23 @@ The post chain is:
 - **Nothing tells a story that could end.** The piece is a state machine over
   programs.
 
-**Long-run memory audit: pending.** Per the repo rule, the RSS soak is the final
-iteration and runs only after the visual style is approved.
+**Long-run memory audit: passed.** It was run as the final iteration, once the look
+was approved:
+
+- The phrase was set to 8 beats with change chance 1.0, so the program changed about
+  every 4 seconds: hundreds of program and palette changes, drops, glitches and folds
+  in the window.
+- After warm-up, **TouchDesigner's physical footprint read 2120 → 2111 MB over 8
+  minutes, 0 MB/min**, flat to within ±5 MB.
+- The engine cooked 60 times a second throughout, with zero errors.
+
+The first attempt measured RSS with `ps`, and it read like a slow leak: 0.7 MB/min
+in the full scene and about 1 MB/min with only the engine running. A bisection
+narrowed it to the engine's parameter writes. Then RSS fell by 1 GB in minutes while
+the footprint stayed flat. macOS was compressing and decompressing TouchDesigner's
+pages under memory pressure, and RSS does not count compressed pages. The lesson,
+and a bisection trap found on the way (locking the render also stopped the engine),
+are now in `debugging.md`.
 
 ## What went wrong on the way
 

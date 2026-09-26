@@ -652,6 +652,30 @@ for i in $(seq 0 7); do ps -o rss= -p $PID | awk '{printf "%.1f MB\n",$1/1024}';
   between 150-second windows in one session). A real leak is a straight line minute
   after minute: the leaking `voyage` build climbed 1554 → 1572 MB in exactly 8 steps of
   ~2.25 MB. Healthy is ≲ 0.2 MB/min over 7+ minutes.
+- **On macOS under memory pressure, RSS lies: measure `footprint` instead.** RSS does
+  not count pages the OS has compressed. So when macOS compresses TouchDesigner,
+  RSS drops, and it climbs again as the running scene touches those pages and
+  decompresses them. That climb looks exactly like a leak. Seen on `tesseract`
+  (2026-09-26), with the true footprint flat at about 2.1 GB throughout:
+  - RSS "grew" 0.7–1.2 MB/min for three windows.
+  - Then RSS fell 1564 → 1528 → 545 MB in minutes.
+
+  A locked scene reads flat on RSS for the same reason: it touches no memory. That
+  makes a bisection by locking look like it found the culprit. `phys_footprint`
+  includes compressed memory and is what Activity Monitor shows; it is the number
+  to trend:
+
+  ```bash
+  for i in $(seq 0 8); do footprint -p $PID | awk '/Footprint:/{for(k=1;k<=NF;k++) if($k=="Footprint:") print $(k+1), $(k+2)}'; sleep 60; done
+  ```
+
+  If the RSS and footprint trends disagree, believe the footprint.
+- **Locking an op also stops everything upstream that only it pulled.** TouchDesigner
+  is pull-based. Locking `render_lines` also stopped the engine, which cooked 0/s,
+  because nothing else pulled it. So "lock the render" measured "lock the engine"
+  too. To isolate an upstream op, lock the downstream op and force-cook the suspect
+  from a temporary `executeDAT` `onFrameStart` (`op.cook(force=True)`). Check its
+  `totalCooks` advances at 60/s, and delete the DAT afterwards.
 
 **3. If it grows, bisect by switching things off.** Measure the slope with the scene
 COMP's `allowCooking = False` (the floor), then with one suspect at a time bypassed
