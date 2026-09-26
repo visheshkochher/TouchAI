@@ -138,8 +138,16 @@ decays. Because it uses max rather than add, it can never wash out to white.
   eye's rotation. Shaders get story time, never `absTime`.
 - **The story loops.**
 
-**Long-run memory audit: pending.** Per the repo rule, the RSS soak is the final
-iteration and runs only after the visual style is approved.
+**Long-run memory audit**, run as the final iteration once the look was approved, the
+way `debugging.md` prescribes:
+
+- The story was shortened to 45 s so it looped through all nine states and the seam.
+- 3 minutes of warm-up, then TouchDesigner's RSS was read from outside once a minute
+  for 7 minutes, with no bridge calls.
+- Result: **1319.7 → 1320.4 MB, 0.10 MB/min**, flat. That is about 36 MB over a
+  six-hour night.
+- The run was real: over the whole window the engine cooked 35,579 times in 36,728
+  frames, the story looped 15 times, and the engine logged zero errors.
 
 ## What went wrong on the way
 
