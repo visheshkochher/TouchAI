@@ -38,18 +38,22 @@ TouchDesigner
 5. Before declaring a scene done, verify real fps (frame-delta over wall clock) fits the
    16.6ms/60fps budget — the triage workflow is in the skill's `debugging.md`, and the
    "quality per unit of compute" ladder in `patterns.md` decides where to spend it.
-6. **Then audit it for long runs.** Scenes here run unattended for hours, so nothing
-   may grow per frame:
+6. **Write it for long runs from the first line.** Scenes here run unattended for
+   hours, so nothing may grow per frame — these are coding rules, not a test, and they
+   apply in every iteration:
    - Script OPs build their channels, rows or points **once** and then only write
      values. `clear()` + `appendChan()` every cook leaks ~2 MB/min of native memory.
    - Every list that gains entries is length-capped and aged out.
    - Every integrated phase wraps or resets at a loop seam.
    - The story loops rather than clamping.
-
-   Then measure TD's process RSS from outside (no bridge calls during the window) over
-   7+ minutes with the story looping. A flat Python object count proves nothing on its
-   own. The procedure is "The long-run memory audit" in `debugging.md`. Record the
-   measured slope in the scene's README.
+7. **The soak test is the final iteration, not every iteration.** Measuring TD's
+   process RSS from outside over 7+ minutes (no bridge calls during the window, story
+   looping) costs ~15 minutes of dead time, and every visual change invalidates it. So
+   iterate on the look first, show the user, and run the soak only **once they have
+   approved the visual style** — as the last step before calling the scene done. A
+   flat Python object count proves nothing on its own. The procedure is "The long-run
+   memory audit" in `debugging.md`. Record the measured slope in the scene's README;
+   until then the README says the soak is still pending.
 
 ## Safety rules
 
