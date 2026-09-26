@@ -613,6 +613,12 @@ Worth a standing check for anything that will run for a whole set:
 Anything that runs unattended — an installation, a club night, a 6-hour loop — must
 pass this before it is called done. It takes about 15 minutes, most of it waiting.
 
+**When: step 1 always, steps 2-3 once, at the end.** The code review (step 1) is how
+the scene is written in the first place, so it applies in every iteration. The RSS
+soak (step 2) is the **final iteration**: run it only after the user has approved the
+visual style, because any visual change invalidates the measurement and 15 minutes of
+dead time per look-tweak is waste. Until then, the README says "soak pending".
+
 **1. Code review: every per-frame append must be bounded or build-once.** Grep the
 scene for `append`, `appendChan`, `appendRow`, `appendCol`, `appendPoint`,
 `appendPoly`, `store(`, `clear()` and `+=`. Each hit must fall into one of three

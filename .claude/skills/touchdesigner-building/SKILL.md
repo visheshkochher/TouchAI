@@ -19,9 +19,12 @@ Every TD task follows this cycle:
 5. **Refine** — `edit` for shader tweaks, `set` for param changes (validates names, handles expressions)
 6. Repeat 4-5 until it looks right; before declaring done, measure real fps (perform
    mode for headline numbers) and run the motion check on anything that should animate
-7. **Long-run audit** — no per-frame growth anywhere (see "Nothing may grow per frame"
-   below), then a quiet RSS slope over 7+ minutes with the story looping. Record the
-   number in the README.
+7. **Show the user and get the visual style approved.** Iterate on 4-6 as often as
+   it takes. Follow the "Nothing may grow per frame" coding rules below in every
+   iteration — they cost nothing to write correctly.
+8. **Soak test — final iteration only.** Once the look is approved, run the long-run
+   memory audit: a quiet RSS slope over 7+ minutes with the story looping. Record the
+   number in the README. Don't soak work-in-progress: any visual change invalidates it.
 
 ## Hard Rules
 
@@ -206,8 +209,9 @@ bounded:
   at a loop seam. Feed shaders story time, never raw `absTime`.
 - **An unattended story loops** through a fade, rather than clamping on its last frame.
 
-Before calling a scene done, and when auditing an existing one, run the **long-run
-memory audit** in [debugging.md](debugging.md): a grep for appends, then a quiet RSS
+Before calling a scene done (after the user has approved its look — the soak is the
+final iteration, not a per-iteration step), and when auditing an existing one, run
+the **long-run memory audit** in [debugging.md](debugging.md): a grep for appends, then a quiet RSS
 slope measured from outside TouchDesigner, then a bisection if it grows. Python's
 object count alone cannot see the worst leak.
 
